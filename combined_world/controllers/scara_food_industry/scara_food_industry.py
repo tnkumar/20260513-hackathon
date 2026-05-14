@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Motor / merge / LED behavior matches example_code/scara_food_industry.py (Webots sample).
+# The coordinator TCP stream sends SCARA_* lines each sim step when SCARA_SPEED_DIV=1.
+
 import os
 import socket
 import time
@@ -31,7 +34,7 @@ class BlinkingLED:
 
 HOST = os.environ.get("COORDINATOR_HOST", "127.0.0.1")
 PORT = int(os.environ.get("COORDINATOR_TCP_PORT", "9099"))
-SIM_SLOWDOWN = max(1, min(100, int(os.environ.get("SIM_SLOWDOWN", "10"))))
+SIM_SLOWDOWN = max(1, min(100, int(os.environ.get("SIM_SLOWDOWN", "1"))))
 
 
 def connect_coordinator():
@@ -50,6 +53,7 @@ def connect_coordinator():
 supervisor = Supervisor()
 timestep = int(supervisor.getBasicTimeStep())
 
+# actuators (same device names as example_code/scara_food_industry.py)
 base_arm = supervisor.getDevice("base_arm_motor")
 arm = supervisor.getDevice("arm_motor")
 shaft_linear = supervisor.getDevice("shaft_linear_motor")
@@ -65,15 +69,34 @@ fruitType = 0
 step = 0
 
 
+def _world_to_parent_translation(fruit, world_xyz):
+    """Fruit `translation` is parent-local; vacuum `getPosition()` is world (SCARA cell under Pose +12 m)."""
+    parent = fruit.getParentNode()
+    if parent is None:
+        return list(world_xyz)
+    try:
+        pw = parent.getPosition()
+        rot = parent.getOrientation()
+    except (AttributeError, TypeError):
+        return list(world_xyz)
+    dw = [world_xyz[i] - pw[i] for i in range(3)]
+    # p_world = R * p_local + pw  =>  p_local = R^T * (p_world - pw)
+    lx = rot[0] * dw[0] + rot[3] * dw[1] + rot[6] * dw[2]
+    ly = rot[1] * dw[0] + rot[4] * dw[1] + rot[7] * dw[2]
+    lz = rot[2] * dw[0] + rot[5] * dw[1] + rot[8] * dw[2]
+    return [lx, ly, lz]
+
+
 def merge_tool(fruit_id, merged_tool):
     if not merged_tool:
         fruit = supervisor.getFromDef("fruit" + str(fruit_id))
         vaccum = supervisor.getFromDef("VACCUM")
-        if fruit:
+        if fruit and vaccum:
             poses = vaccum.getPosition()
             fruitTranslation = fruit.getField('translation')
             if fruitTranslation and poses:
-                fruitTranslation.setSFVec3f([poses[0], poses[1], poses[2] - 0.07])
+                world_target = [poses[0], poses[1], poses[2] - 0.07]
+                fruitTranslation.setSFVec3f(_world_to_parent_translation(fruit, world_target))
                 fruit.resetPhysics()
 
 
@@ -132,11 +155,13 @@ def poll_socket_commands():
             handle_command(line)
 
 
-while supervisor.step(timestep) != -1:
+# Apply pending SCARA_* lines before supervisor.step (matches sample timing vs step-then-poll).
+while True:
+    poll_socket_commands()
+    if supervisor.step(timestep) == -1:
+        break
     if step % 100 == 0:
         led.toggle()
     step += 1
-
-    poll_socket_commands()
     if SIM_SLOWDOWN > 1:
         time.sleep((SIM_SLOWDOWN - 1) * timestep / 1000.0)

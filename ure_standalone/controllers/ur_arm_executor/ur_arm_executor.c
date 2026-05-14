@@ -47,7 +47,7 @@ static void sim_wall_sleep_after_step(int timestep_ms) {
   usleep((unsigned int)((m - 1) * timestep_ms * 1000u));
 }
 
-/* Finger / arm targets match example_code/ure_can_grasper.c (Cyberbotics demo). */
+/* Motor targets for CMD lines: grasp/release match example_code/ure_can_grasper.c (Cyberbotics UR demo). */
 static void apply_command(const char *cmd, WbDeviceTag hand_motors[3], WbDeviceTag ur_motors[4],
                           const double target_positions[4]) {
   int i;
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
   int i;
   for (i = 0; i < 4; ++i)
     wb_motor_set_velocity(ur_motors[i], speed);
-  /* example_code/ure_can_grasper.c does not set velocity on finger motors. */
+  /* example_code/ure_can_grasper.c: velocity only on the four arm joints, not finger motors. */
 
   WbDeviceTag distance_sensor = wb_robot_get_device("distance sensor");
   wb_distance_sensor_enable(distance_sensor, time_step);

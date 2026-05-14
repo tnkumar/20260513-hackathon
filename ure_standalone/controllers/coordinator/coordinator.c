@@ -96,6 +96,29 @@ static int set_nonblocking(int fd) {
   return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* Non-blocking client sockets: retry short writes / EAGAIN so CMD lines are not dropped. */
+static int write_full_retry(int fd, const char *buf, size_t len) {
+  size_t off = 0;
+  int stall = 0;
+  while (off < len) {
+    ssize_t w = write(fd, buf + off, len - off);
+    if (w < 0) {
+      if (errno == EINTR)
+        continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (stall++ > 8000)
+          return -1;
+        usleep(200);
+        continue;
+      }
+      return -1;
+    }
+    stall = 0;
+    off += (size_t)w;
+  }
+  return 0;
+}
+
 static int tcp_listen(int port) {
   int s = socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0)
@@ -132,10 +155,8 @@ static void strip_trailing_crlf(char *s) {
 static void ui_broadcast_raw(const char *msg, size_t len) {
   int i;
   for (i = 0; i < MAX_CLIENTS; ++i) {
-    if (clients[i].fd >= 0 && clients[i].role == ROLE_UI) {
-      ssize_t w = write(clients[i].fd, msg, len);
-      (void)w;
-    }
+    if (clients[i].fd >= 0 && clients[i].role == ROLE_UI)
+      (void)write_full_retry(clients[i].fd, msg, len);
   }
 }
 
@@ -366,37 +387,34 @@ static void accept_new(void) {
       continue;
     {
       const char *welcome = "OK send REGISTER <UI|UR3e|UR5e|UR10e|ScaraT6> then newline\n";
-      ssize_t w = write(fd, welcome, strlen(welcome));
-      (void)w;
+      (void)write_full_retry(fd, welcome, strlen(welcome));
     }
   }
 }
 
 static void send_arm_cmd(int arm_index, const char *cmd) {
   char buf[96];
-  ssize_t w;
   if (ur_fd[arm_index] < 0)
     return;
   snprintf(buf, sizeof(buf), "CMD %s\n", cmd);
-  w = write(ur_fd[arm_index], buf, strlen(buf));
-  (void)w;
+  if (write_full_retry(ur_fd[arm_index], buf, strlen(buf)) < 0)
+    return;
   log_and_ui(LOG_PREFIX "-> %s: sending command: %s\n", ARM_NAME[arm_index], cmd);
   ui_broadcast_fmt("CMD|%s|%s\n", ARM_NAME[arm_index], cmd);
 }
 
 static void send_scara_cmd(const char *msg) {
   char buf[256];
-  ssize_t w;
   if (scara_fd < 0)
     return;
   snprintf(buf, sizeof(buf), "%s\n", msg);
-  w = write(scara_fd, buf, strlen(buf));
-  (void)w;
+  if (write_full_retry(scara_fd, buf, strlen(buf)) < 0)
+    return;
   log_and_ui(LOG_PREFIX "-> ScaraT6: sending command: %s\n", msg);
   ui_broadcast_fmt("CMD|ScaraT6|%s\n", msg);
 }
 
-/* Mirrors timestep logic from scara_food_industry.py (same if/elif order, then i++). */
+/* Mirrors timestep logic from example_code/scara_food_industry.py (same if/elif order, then i++). */
 static void scara_coordinator_step(void) {
   static int i = 0;
   static int fruitType = 0;
@@ -454,10 +472,10 @@ static int ur_phase_ticks_from_env(void) {
   }
 }
 
-/* Run scara_coordinator_step only every N supervisor steps (slow SCARA script vs sim time). */
+/* Run scara_coordinator_step every N supervisor steps (default 1 = same cadence as Webots sample). */
 static int scara_stride_from_env(void) {
   const char *e = getenv("SCARA_SPEED_DIV");
-  int div = 10;
+  int div = 1;
   if (e && e[0]) {
     div = atoi(e);
     if (div < 1)
