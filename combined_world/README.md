@@ -29,9 +29,9 @@ export WEBOTS_HOME="/Applications/Webots.app"   # adjust if needed
 ./start_all.sh
 ```
 
-This builds C controllers, starts the **WebSocket→TCP bridge** and **Vite** dev server, opens **http://127.0.0.1:5173**, then launches **`combined_world/worlds/ure_plus_scara.wbt`**. The React UI connects to the coordinator (via the bridge), shows **CMD / LOG** traffic in **four columns** (UR3e, UR5e, UR10e, ScaraT6), and can send **CONTROL RUN / PAUSE / FAST** to the Webots supervisor. **`UR_SPEED_MULT`** (default **10**) shortens UR phase waits in the coordinator; **`SCARA_SPEED_DIV`** (default **10**) runs the SCARA script tick **N** times less often per simulation step (slower SCARA sequence). **`SIM_SLOWDOWN`** (default **1**) optionally stretches wall-clock time after each `wb_robot_step` in all controllers.
+This builds C controllers, starts the **WebSocket→TCP bridge** and **Vite** dev server, opens **http://127.0.0.1:5173**, then launches **`combined_world/worlds/ure_plus_scara.wbt`**. The React UI connects to the coordinator (via the bridge), shows **CMD / LOG** traffic in **four columns** (UR3e, UR5e, UR10e, ScaraT6), and can send **CONTROL RUN / PAUSE / FAST** to the Webots supervisor. **`UR_SPEED_MULT`** (default **1**) scales the computed grasp/release dwell from **`ceil(8 / mult)`** steps; the coordinator **never uses fewer than 8** so grippers can close before **`ROTATING_ARM`**. **`SCARA_SPEED_DIV`** (default **10**) slows the SCARA high-level script. **`SIM_SLOWDOWN`** (default **1**) optionally stretches wall-clock time after each `wb_robot_step`.
 
-Environment (optional): **`COORDINATOR_TCP_PORT`** (default **9099**), **`FRONTEND_WS_PORT`** (default **8765**), **`COORDINATOR_HOST`**, **`SIM_SLOWDOWN`** (≥ 1), **`UR_SPEED_MULT`** (≥ 1, default **10**), **`SCARA_SPEED_DIV`** (≥ 1, default **10**).
+Environment (optional): **`COORDINATOR_TCP_PORT`** (default **9099**), **`FRONTEND_WS_PORT`** (default **8765**), **`COORDINATOR_HOST`**, **`SIM_SLOWDOWN`** (≥ 1), **`UR_SPEED_MULT`** (≥ 1, default **1**), **`SCARA_SPEED_DIV`** (≥ 1, default **10**).
 
 ---
 
@@ -64,8 +64,8 @@ Environment (optional): **`COORDINATOR_TCP_PORT`** (default **9099**), **`FRONTE
 
 | Controller | Role |
 |------------|------|
-| **`coordinator`** | C — **Supervisor** TCP server (**`REGISTER …`**, **`CMD`**, **`TELEM`**, UI **`CONTROL *`**). **UR phase timing:** waits **`ceil(8 / UR_SPEED_MULT)`** steps between UR phase edges (default **UR_SPEED_MULT=10** → **1** step vs legacy **8**). **SCARA timing:** `scara_coordinator_step()` runs every **`SCARA_SPEED_DIV`** supervisor steps (default **10** → SCARA script index advances **10×** slower in simulation time). Optional **`SIM_SLOWDOWN`** wall stretch after each `wb_robot_step`. |
-| **`ur_arm_executor`** | C — one process per UR; **TCP client** to the coordinator (same port); sends **`TELEM`** each step; applies **`CMD …`** lines. **`controllerArgs`**: `[ speed, UR3e | UR5e | UR10e ]`. Same **`SIM_SLOWDOWN`** post-step delay. |
+| **`coordinator`** | C — **Supervisor** TCP server (**`REGISTER …`**, **`CMD`**, **`TELEM`**, UI **`CONTROL *`**). **UR phase timing:** `ceil(8 / UR_SPEED_MULT)` coordinator steps between grasp / release dwell edges, **never fewer than 8** so the Robotiq can close before **`ROTATING_ARM`**. **`SCARA_SPEED_DIV`:** `scara_coordinator_step()` every **N** steps (default **10**). Optional **`SIM_SLOWDOWN`**. |
+| **`ur_arm_executor`** | C — one process per UR; **TCP client** to the coordinator (same port); sends **`TELEM`** each step; applies **`CMD …`** lines. **`controllerArgs`**: `[ speed, UR3e | UR5e | UR10e ]`. Grasp/release motor targets match **`example_code/ure_can_grasper.c`** (finger **0.85**, min open on release; **only** the four arm joints get **`wb_motor_set_velocity`**). **`GRASPING_CAN`** / **`RELEASING_CAN`** are **re-applied each step** while active so finger targets stay commanded across TCP scheduling. Same **`SIM_SLOWDOWN`** post-step delay. |
 | **`conveyor_belt`** | C — belt motion; uses the same **`SIM_SLOWDOWN`** delay after each step so conveyors do not outrun the UR/SCARA stack. |
 | **`scara_food_industry`** | Python — **TCP client** to the coordinator; receives `SCARA_*` command lines (no console echo of received lines). Same **`SIM_SLOWDOWN`** delay after each `supervisor.step`. |
 

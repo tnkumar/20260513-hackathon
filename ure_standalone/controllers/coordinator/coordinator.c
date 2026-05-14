@@ -431,10 +431,11 @@ static void scara_coordinator_step(void) {
   i++;
 }
 
-/* Default base wait between UR phase edges was 8 coordinator steps (see arm state machine). */
+/* UR phase wait in coordinator steps (legacy base 8). Never below 8 so the gripper
+ * can close / open before the arm moves (GRASPING_CAN / RELEASING_CAN need physics time). */
 static int ur_phase_ticks_from_env(void) {
   const char *e = getenv("UR_SPEED_MULT");
-  int mult = 10;
+  int mult = 1;
   if (e && e[0]) {
     mult = atoi(e);
     if (mult < 1)
@@ -445,7 +446,11 @@ static int ur_phase_ticks_from_env(void) {
   {
     const int base = 8;
     int t = (base + mult - 1) / mult;
-    return t < 1 ? 1 : t;
+    if (t < 8)
+      t = 8;
+    if (t > 64)
+      t = 64;
+    return t;
   }
 }
 
@@ -504,8 +509,8 @@ int main(int argc, char **argv) {
       telemetry[k].distance = 10000.0;
       telemetry[k].wrist = 0.0;
     }
-    printf(LOG_PREFIX "UR phase ticks=%d (UR_SPEED_MULT); SCARA coordinator stride=%d (SCARA_SPEED_DIV)\n", ur_phase_ticks,
-           scara_stride);
+    printf(LOG_PREFIX "UR phase ticks=%d (UR_SPEED_MULT, min 8 for grasp physics); SCARA coordinator stride=%d (SCARA_SPEED_DIV)\n",
+           ur_phase_ticks, scara_stride);
 
     while (wb_robot_step(time_step) != -1) {
       accept_new();

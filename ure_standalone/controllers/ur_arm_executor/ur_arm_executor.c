@@ -29,6 +29,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* Last CMD from coordinator; used to re-apply grasp/release each step (TCP split vs monolithic demo). */
+static char g_last_ur_cmd[40] = "";
+
 static void sim_wall_sleep_after_step(int timestep_ms) {
   const char *e = getenv("SIM_SLOWDOWN");
   int m = 10;
@@ -44,6 +47,7 @@ static void sim_wall_sleep_after_step(int timestep_ms) {
   usleep((unsigned int)((m - 1) * timestep_ms * 1000u));
 }
 
+/* Finger / arm targets match example_code/ure_can_grasper.c (Cyberbotics demo). */
 static void apply_command(const char *cmd, WbDeviceTag hand_motors[3], WbDeviceTag ur_motors[4],
                           const double target_positions[4]) {
   int i;
@@ -131,8 +135,11 @@ static void drain_socket_commands(int *sock_ptr, char *line_buf, size_t *line_le
     if (!nl)
       break;
     *nl = '\0';
-    if (strncmp(line_buf, "CMD ", 4) == 0)
-      apply_command(line_buf + 4, hand_motors, ur_motors, target_positions);
+    if (strncmp(line_buf, "CMD ", 4) == 0) {
+      const char *c = line_buf + 4;
+      apply_command(c, hand_motors, ur_motors, target_positions);
+      snprintf(g_last_ur_cmd, sizeof(g_last_ur_cmd), "%s", c);
+    }
     {
       size_t rest = *line_len - (size_t)(nl - line_buf) - 1;
       memmove(line_buf, nl + 1, rest);
@@ -173,6 +180,7 @@ int main(int argc, char **argv) {
   int i;
   for (i = 0; i < 4; ++i)
     wb_motor_set_velocity(ur_motors[i], speed);
+  /* example_code/ure_can_grasper.c does not set velocity on finger motors. */
 
   WbDeviceTag distance_sensor = wb_robot_get_device("distance sensor");
   wb_distance_sensor_enable(distance_sensor, time_step);
@@ -204,10 +212,18 @@ int main(int argc, char **argv) {
       if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
         close(coord_sock);
         coord_sock = -1;
-      } else
+      } else {
         drain_socket_commands(&coord_sock, line_buf, &line_len, hand_motors, ur_motors, target_positions);
-      if (coord_sock < 0)
+        /* Hold finger targets every physics step like the single-process demo loop. */
+        if (strcmp(g_last_ur_cmd, "GRASPING_CAN") == 0)
+          apply_command("GRASPING_CAN", hand_motors, ur_motors, target_positions);
+        else if (strcmp(g_last_ur_cmd, "RELEASING_CAN") == 0)
+          apply_command("RELEASING_CAN", hand_motors, ur_motors, target_positions);
+      }
+      if (coord_sock < 0) {
         line_len = 0;
+        g_last_ur_cmd[0] = '\0';
+      }
     }
     sim_wall_sleep_after_step(time_step);
   }
