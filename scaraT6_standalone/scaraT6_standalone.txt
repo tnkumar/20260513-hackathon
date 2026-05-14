@@ -1,0 +1,1 @@
+Copy everything from Webots sample application to a separate directory in the desktop so that the controller functionality is not dependent on any file from /Applications/Webots.app directory

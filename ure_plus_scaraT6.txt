@@ -1,0 +1,5 @@
+create a world that uses ure_stadalone as a starting point and adds the world from scaraT6_standalone to create a combined world. Create a README for the combined world. Make sure that these two worlds do not overlap
+
+The ure controller sends images to the console as in image. split controllers so that it consists of a top part and a bottom part. The top part sends messages to the bottom controller similar to what is in the console. The top controller should be one file sending commands to multiple ure robots
+
+Provide a REACT UI as front end to the ur_coordinator and provide UI elements like starting supervisor, printing received commands, printing commands to URE, scaraT6 on the UI. Create these in a front end directory and modify the code with the communication between supervisor and the underlying controllers being a socket based mechanism. In UI, group different UREs and scara at different parts of the screen. Also create a shell script to start all in sequence and open the application
