@@ -1,0 +1,4 @@
+# Project-level simulation defaults.
+# Shell environment variables take priority over these (os.environ.setdefault).
+# Set SIM_SLOWDOWN=10 in your shell before launching Webots for slow/demo mode.
+SIM_SLOWDOWN=1

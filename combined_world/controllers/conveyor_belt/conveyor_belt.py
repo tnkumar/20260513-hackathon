@@ -1,7 +1,20 @@
 import os
 import sys
 import time
+from pathlib import Path
 from controller import Robot
+
+
+def _load_sim_config():
+    config = Path(__file__).parent.parent / ".sim_config"
+    if config.exists():
+        for line in config.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+_load_sim_config()
 
 
 def sim_wall_sleep_after_step(timestep_ms):

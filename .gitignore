@@ -15,3 +15,7 @@ frontend/dist/
 # Environment / secrets
 .env
 llm_agent/.env
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md
