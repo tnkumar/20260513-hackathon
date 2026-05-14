@@ -401,7 +401,7 @@ UR10e {
     }
   ]
 }
-ConveyorBelt {
+DEF CAN_BELT_1 ConveyorBelt {
   translation 3.18 -1.05 0
   rotation 0 0 1 3.141592
   size 8 0.7 0.6
@@ -413,7 +413,7 @@ ConveyorBelt {
   borderHeight 0
   speed 0.2
 }
-ConveyorBelt {
+DEF CAN_BELT_2 ConveyorBelt {
   translation 1.77 2.55 0.75
   rotation 0 0 1 -1.5707973071795864
   name "conveyor belt(2)"
@@ -426,7 +426,7 @@ ConveyorBelt {
   borderHeight 0
   speed 0.2
 }
-ConveyorBelt {
+DEF CAN_BELT_3 ConveyorBelt {
   translation 0 0.69 0
   rotation 0 1 0 0
   name "conveyor belt(1)"
@@ -656,7 +656,7 @@ Pose {
       rotation 0 0 -1 1.5708
       name "scara fire extinguisher"
     }
-    ConveyorBelt {
+    DEF SCARA_BELT ConveyorBelt {
       translation 2.48 -0.83 0
       rotation 0 0 1 3.14159
       name "scara fruit conveyor belt"

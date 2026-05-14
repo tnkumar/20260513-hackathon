@@ -11,3 +11,7 @@ frontend/dist/
 .DS_Store
 *.swp
 *.swo
+
+# Environment / secrets
+.env
+llm_agent/.env

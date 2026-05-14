@@ -56,6 +56,38 @@ static void sim_wall_sleep_after_step(int timestep_ms) {
 
 static const char *const ARM_NAME[NUM_ARMS] = {"UR3e", "UR5e", "UR10e"};
 
+/* Belt supervisor refs — populated after wb_robot_init(). */
+#define NUM_CAN_BELTS 3
+static const char *const CAN_BELT_DEF[NUM_CAN_BELTS] = {"CAN_BELT_1", "CAN_BELT_2", "CAN_BELT_3"};
+static const double CAN_BELT_NOMINAL[NUM_CAN_BELTS] = {0.2, 0.2, 0.062};
+static WbNodeRef can_belt_node[NUM_CAN_BELTS];
+static WbFieldRef can_belt_speed[NUM_CAN_BELTS];
+static WbNodeRef scara_belt_node;
+static WbFieldRef scara_belt_speed;
+static const double SCARA_BELT_NOMINAL = 0.1;
+
+static void belts_init(void) {
+  int k;
+  for (k = 0; k < NUM_CAN_BELTS; ++k) {
+    can_belt_node[k] = wb_supervisor_node_get_from_def(CAN_BELT_DEF[k]);
+    can_belt_speed[k] = can_belt_node[k] ? wb_supervisor_node_get_field(can_belt_node[k], "speed") : NULL;
+  }
+  scara_belt_node = wb_supervisor_node_get_from_def("SCARA_BELT");
+  scara_belt_speed = scara_belt_node ? wb_supervisor_node_get_field(scara_belt_node, "speed") : NULL;
+}
+
+static void conveyor_set_can(double speed) {
+  int k;
+  for (k = 0; k < NUM_CAN_BELTS; ++k)
+    if (can_belt_speed[k])
+      wb_supervisor_field_set_sf_float(can_belt_speed[k], speed);
+}
+
+static void conveyor_set_fruit(double speed) {
+  if (scara_belt_speed)
+    wb_supervisor_field_set_sf_float(scara_belt_speed, speed);
+}
+
 typedef struct {
   double distance;
   double wrist;
@@ -266,6 +298,25 @@ static void process_client_line(int idx, char *line, ArmTelemetry *telemetry) {
       wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_FAST);
       printf(LOG_PREFIX "UI: simulation FAST\n");
       ui_broadcast_fmt("LOG|UI|simulation FAST\n");
+    } else if (strcmp(line, "CONVEYOR_STOP can") == 0) {
+      conveyor_set_can(0.0);
+      log_and_ui(LOG_PREFIX "UI: can conveyors STOPPED\n");
+      ui_broadcast_fmt("LOG|conveyor|can|STOPPED\n");
+    } else if (strcmp(line, "CONVEYOR_START can") == 0) {
+      int k;
+      for (k = 0; k < NUM_CAN_BELTS; ++k)
+        if (can_belt_speed[k])
+          wb_supervisor_field_set_sf_float(can_belt_speed[k], CAN_BELT_NOMINAL[k]);
+      log_and_ui(LOG_PREFIX "UI: can conveyors STARTED\n");
+      ui_broadcast_fmt("LOG|conveyor|can|STARTED\n");
+    } else if (strcmp(line, "CONVEYOR_STOP fruit") == 0) {
+      conveyor_set_fruit(0.0);
+      log_and_ui(LOG_PREFIX "UI: fruit conveyor STOPPED\n");
+      ui_broadcast_fmt("LOG|conveyor|fruit|STOPPED\n");
+    } else if (strcmp(line, "CONVEYOR_START fruit") == 0) {
+      conveyor_set_fruit(SCARA_BELT_NOMINAL);
+      log_and_ui(LOG_PREFIX "UI: fruit conveyor STARTED\n");
+      ui_broadcast_fmt("LOG|conveyor|fruit|STARTED\n");
     }
     return;
   }
@@ -489,6 +540,7 @@ int main(int argc, char **argv) {
 
   wb_robot_init();
   const int time_step = (int)wb_robot_get_basic_time_step();
+  belts_init();
 
   listen_fd = tcp_listen(port);
   if (listen_fd < 0) {
