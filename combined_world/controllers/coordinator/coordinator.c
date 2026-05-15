@@ -56,6 +56,25 @@ static void sim_wall_sleep_after_step(int timestep_ms) {
 
 static const char *const ARM_NAME[NUM_ARMS] = {"UR3e", "UR5e", "UR10e"};
 
+enum OperationMode { MODE_BALANCED, MODE_FRUIT_PRIORITY, MODE_CAN_PRIORITY, MODE_LOW_POWER, MODE_HIGH_CAPACITY };
+enum TargetType { TARGET_NONE, TARGET_CANS, TARGET_FRUITS, TARGET_APPLES, TARGET_ORANGES };
+
+typedef struct {
+  int robot_enabled[NUM_ARMS];
+  int scara_enabled;
+  int can_line_enabled;
+  int fruit_line_enabled;
+  enum OperationMode mode;
+  enum TargetType target_type;
+  int target_count;
+  int cans;
+  int arm_cans[NUM_ARMS];
+  int apples;
+  int oranges;
+} WorkcellState;
+
+static WorkcellState workcell;
+
 typedef struct {
   double distance;
   double wrist;
@@ -88,6 +107,9 @@ static Client clients[MAX_CLIENTS];
 static int listen_fd = -1;
 static int ur_fd[NUM_ARMS];
 static int scara_fd = -1;
+
+static void send_arm_cmd(int arm_index, const char *cmd);
+static void send_scara_cmd(const char *msg);
 
 static int set_nonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
@@ -156,6 +178,205 @@ static void log_and_ui(const char *fmt, ...) {
   va_end(ap);
   printf("%s", msg);
   ui_broadcast_fmt("LOG|%s", msg);
+}
+
+static const char *mode_name(enum OperationMode mode) {
+  switch (mode) {
+    case MODE_FRUIT_PRIORITY:
+      return "fruit_priority";
+    case MODE_CAN_PRIORITY:
+      return "can_priority";
+    case MODE_LOW_POWER:
+      return "low_power";
+    case MODE_HIGH_CAPACITY:
+      return "high_capacity";
+    case MODE_BALANCED:
+    default:
+      return "balanced";
+  }
+}
+
+static const char *target_name(enum TargetType target) {
+  switch (target) {
+    case TARGET_CANS:
+      return "cans";
+    case TARGET_FRUITS:
+      return "fruits";
+    case TARGET_APPLES:
+      return "apples";
+    case TARGET_ORANGES:
+      return "oranges";
+    case TARGET_NONE:
+    default:
+      return "none";
+  }
+}
+
+static void broadcast_state(void) {
+  ui_broadcast_fmt("STATE|mode|%s\n", mode_name(workcell.mode));
+  ui_broadcast_fmt("STATE|line|can|%s\n", workcell.can_line_enabled ? "running" : "stopped");
+  ui_broadcast_fmt("STATE|line|fruit|%s\n", workcell.fruit_line_enabled ? "running" : "stopped");
+  ui_broadcast_fmt("STATE|robot|UR3e|%s\n", workcell.robot_enabled[0] ? "enabled" : "disabled");
+  ui_broadcast_fmt("STATE|robot|UR5e|%s\n", workcell.robot_enabled[1] ? "enabled" : "disabled");
+  ui_broadcast_fmt("STATE|robot|UR10e|%s\n", workcell.robot_enabled[2] ? "enabled" : "disabled");
+  ui_broadcast_fmt("STATE|robot|ScaraT6|%s\n", workcell.scara_enabled ? "enabled" : "disabled");
+  ui_broadcast_fmt("STATE|target|%s|%d\n", target_name(workcell.target_type), workcell.target_count);
+  ui_broadcast_fmt("COUNT|cans|%d\n", workcell.cans);
+  ui_broadcast_fmt("COUNT|apples|%d\n", workcell.apples);
+  ui_broadcast_fmt("COUNT|oranges|%d\n", workcell.oranges);
+  ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
+}
+
+static int target_reached(void) {
+  if (workcell.target_count <= 0)
+    return 0;
+  switch (workcell.target_type) {
+    case TARGET_CANS:
+      return workcell.cans >= workcell.target_count;
+    case TARGET_FRUITS:
+      return workcell.apples + workcell.oranges >= workcell.target_count;
+    case TARGET_APPLES:
+      return workcell.apples >= workcell.target_count;
+    case TARGET_ORANGES:
+      return workcell.oranges >= workcell.target_count;
+    case TARGET_NONE:
+    default:
+      return 0;
+  }
+}
+
+static void maybe_complete_target(void) {
+  if (!target_reached())
+    return;
+  log_and_ui(LOG_PREFIX "production target reached: %s %d; returning to balanced mode\n", target_name(workcell.target_type),
+             workcell.target_count);
+  workcell.target_type = TARGET_NONE;
+  workcell.target_count = 0;
+  workcell.mode = MODE_BALANCED;
+  workcell.can_line_enabled = 1;
+  workcell.fruit_line_enabled = 1;
+  broadcast_state();
+}
+
+static int arm_index_from_name(const char *name) {
+  int i;
+  for (i = 0; i < NUM_ARMS; ++i) {
+    if (strcmp(name, ARM_NAME[i]) == 0)
+      return i;
+  }
+  return -1;
+}
+
+static void apply_mode(enum OperationMode mode) {
+  workcell.mode = mode;
+  workcell.can_line_enabled = 1;
+  workcell.fruit_line_enabled = 1;
+  if (mode == MODE_BALANCED || mode == MODE_HIGH_CAPACITY) {
+    workcell.robot_enabled[0] = 1;
+    workcell.robot_enabled[1] = 1;
+    workcell.robot_enabled[2] = 1;
+    workcell.scara_enabled = 1;
+  } else if (mode == MODE_LOW_POWER) {
+    workcell.robot_enabled[2] = 0;
+  }
+  log_and_ui(LOG_PREFIX "operation mode set to %s\n", mode_name(mode));
+  broadcast_state();
+}
+
+static void handle_ui_control_line(char *line) {
+  char a[64], b[64], c[64];
+  int n;
+  if (strcmp(line, "CONTROL RUN") == 0) {
+    wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_REAL_TIME);
+    printf(LOG_PREFIX "UI: simulation RUN\n");
+    ui_broadcast_fmt("LOG|UI|simulation RUN\n");
+    return;
+  }
+  if (strcmp(line, "CONTROL PAUSE") == 0) {
+    wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_PAUSE);
+    printf(LOG_PREFIX "UI: simulation PAUSE\n");
+    ui_broadcast_fmt("LOG|UI|simulation PAUSE\n");
+    return;
+  }
+  if (strcmp(line, "CONTROL FAST") == 0) {
+    wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_FAST);
+    printf(LOG_PREFIX "UI: simulation FAST\n");
+    ui_broadcast_fmt("LOG|UI|simulation FAST\n");
+    return;
+  }
+  if (strcmp(line, "CONTROL STATUS") == 0) {
+    broadcast_state();
+    return;
+  }
+  if (sscanf(line, "CONTROL MODE %63s", a) == 1) {
+    if (strcmp(a, "BALANCED") == 0)
+      apply_mode(MODE_BALANCED);
+    else if (strcmp(a, "FRUIT_PRIORITY") == 0)
+      apply_mode(MODE_FRUIT_PRIORITY);
+    else if (strcmp(a, "CAN_PRIORITY") == 0)
+      apply_mode(MODE_CAN_PRIORITY);
+    else if (strcmp(a, "LOW_POWER") == 0)
+      apply_mode(MODE_LOW_POWER);
+    else if (strcmp(a, "HIGH_CAPACITY") == 0)
+      apply_mode(MODE_HIGH_CAPACITY);
+    return;
+  }
+  if (sscanf(line, "CONTROL %63s %63s", a, b) == 2 && (strcmp(a, "ENABLE") == 0 || strcmp(a, "DISABLE") == 0)) {
+    const int enabled = strcmp(a, "ENABLE") == 0;
+    int ai = arm_index_from_name(b);
+    if (ai >= 0) {
+      workcell.robot_enabled[ai] = enabled;
+      log_and_ui(LOG_PREFIX "%s %s by operator\n", ARM_NAME[ai], enabled ? "enabled" : "disabled");
+      if (!enabled)
+        send_arm_cmd(ai, "WAITING");
+      broadcast_state();
+    } else if (strcmp(b, "ScaraT6") == 0) {
+      workcell.scara_enabled = enabled;
+      log_and_ui(LOG_PREFIX "ScaraT6 %s by operator\n", enabled ? "enabled" : "disabled");
+      if (!enabled)
+        send_scara_cmd("SCARA_HOME");
+      broadcast_state();
+    }
+    return;
+  }
+  if (sscanf(line, "CONTROL LINE %63s %63s", a, b) == 2) {
+    int enabled = strcmp(b, "START") == 0;
+    if (strcmp(a, "CAN") == 0) {
+      workcell.can_line_enabled = enabled;
+      log_and_ui(LOG_PREFIX "can line %s\n", enabled ? "started" : "stopped");
+    } else if (strcmp(a, "FRUIT") == 0) {
+      workcell.fruit_line_enabled = enabled;
+      log_and_ui(LOG_PREFIX "fruit line %s\n", enabled ? "started" : "stopped");
+      if (!enabled)
+        send_scara_cmd("SCARA_HOME");
+    }
+    broadcast_state();
+    return;
+  }
+  if (strcmp(line, "CONTROL TARGET CLEAR") == 0) {
+    workcell.target_type = TARGET_NONE;
+    workcell.target_count = 0;
+    log_and_ui(LOG_PREFIX "production target cleared\n");
+    broadcast_state();
+    return;
+  }
+  n = 0;
+  if (sscanf(line, "CONTROL TARGET %63s %d", c, &n) == 2 && n > 0) {
+    if (strcmp(c, "CANS") == 0)
+      workcell.target_type = TARGET_CANS;
+    else if (strcmp(c, "FRUITS") == 0)
+      workcell.target_type = TARGET_FRUITS;
+    else if (strcmp(c, "APPLES") == 0)
+      workcell.target_type = TARGET_APPLES;
+    else if (strcmp(c, "ORANGES") == 0)
+      workcell.target_type = TARGET_ORANGES;
+    else
+      return;
+    workcell.target_count = n;
+    log_and_ui(LOG_PREFIX "production target set: %s %d\n", target_name(workcell.target_type), n);
+    broadcast_state();
+    return;
+  }
 }
 
 static int client_slot_for_fd(int fd) {
@@ -254,19 +475,7 @@ static void process_client_line(int idx, char *line, ArmTelemetry *telemetry) {
   Client *c = &clients[idx];
   if (c->role == ROLE_UI) {
     strip_trailing_crlf(line);
-    if (strcmp(line, "CONTROL RUN") == 0) {
-      wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_REAL_TIME);
-      printf(LOG_PREFIX "UI: simulation RUN\n");
-      ui_broadcast_fmt("LOG|UI|simulation RUN\n");
-    } else if (strcmp(line, "CONTROL PAUSE") == 0) {
-      wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_PAUSE);
-      printf(LOG_PREFIX "UI: simulation PAUSE\n");
-      ui_broadcast_fmt("LOG|UI|simulation PAUSE\n");
-    } else if (strcmp(line, "CONTROL FAST") == 0) {
-      wb_supervisor_simulation_set_mode(WB_SUPERVISOR_SIMULATION_MODE_FAST);
-      printf(LOG_PREFIX "UI: simulation FAST\n");
-      ui_broadcast_fmt("LOG|UI|simulation FAST\n");
-    }
+    handle_ui_control_line(line);
     return;
   }
   if (c->role == ROLE_SCARA)
@@ -289,6 +498,7 @@ static void process_client_line(int idx, char *line, ArmTelemetry *telemetry) {
       } else if (r == ROLE_UI) {
         printf(LOG_PREFIX "registered UI on fd %d\n", c->fd);
         ui_broadcast_fmt("LOG|registered|UI\n");
+        broadcast_state();
       }
     }
     return;
@@ -382,6 +592,13 @@ static void send_arm_cmd(int arm_index, const char *cmd) {
   (void)w;
   log_and_ui(LOG_PREFIX "-> %s: sending command: %s\n", ARM_NAME[arm_index], cmd);
   ui_broadcast_fmt("CMD|%s|%s\n", ARM_NAME[arm_index], cmd);
+  if (strcmp(cmd, "RELEASING_CAN") == 0) {
+    workcell.cans++;
+    workcell.arm_cans[arm_index]++;
+    ui_broadcast_fmt("COUNT|cans|%d\n", workcell.cans);
+    ui_broadcast_fmt("COUNT|%s|cans|%d\n", ARM_NAME[arm_index], workcell.arm_cans[arm_index]);
+    maybe_complete_target();
+  }
 }
 
 static void send_scara_cmd(const char *msg) {
@@ -400,12 +617,14 @@ static void send_scara_cmd(const char *msg) {
 static void scara_coordinator_step(void) {
   static int i = 0;
   static int fruitType = 0;
+  static int sorted_this_cycle = 0;
   char buf[80];
 
-  if (scara_fd < 0)
+  if (scara_fd < 0 || !workcell.scara_enabled || !workcell.fruit_line_enabled)
     return;
 
   if (i == 0) {
+    sorted_this_cycle = 0;
     send_scara_cmd("SCARA_HOME");
   } else if (i > 275) {
     i = -1;
@@ -416,10 +635,25 @@ static void scara_coordinator_step(void) {
   } else if (i > 90) {
     send_scara_cmd("SCARA_MERGE");
     if (i > 125) {
-      if (fruitType)
+      if (fruitType) {
         send_scara_cmd("SCARA_SORT_ORANGE");
-      else
+        if (!sorted_this_cycle) {
+          workcell.oranges++;
+          sorted_this_cycle = 1;
+          ui_broadcast_fmt("COUNT|oranges|%d\n", workcell.oranges);
+          ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
+          maybe_complete_target();
+        }
+      } else {
         send_scara_cmd("SCARA_SORT_APPLE");
+        if (!sorted_this_cycle) {
+          workcell.apples++;
+          sorted_this_cycle = 1;
+          ui_broadcast_fmt("COUNT|apples|%d\n", workcell.apples);
+          ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
+          maybe_complete_target();
+        }
+      }
     } else
       send_scara_cmd("SCARA_SHAFT_UP");
   } else if (i > 75) {
@@ -468,6 +702,22 @@ static int scara_stride_from_env(void) {
   return div;
 }
 
+static int scara_stride_for_mode(int env_stride) {
+  switch (workcell.mode) {
+    case MODE_FRUIT_PRIORITY:
+      return env_stride > 4 ? 4 : env_stride;
+    case MODE_CAN_PRIORITY:
+      return env_stride < 18 ? 18 : env_stride;
+    case MODE_LOW_POWER:
+      return env_stride < 24 ? 24 : env_stride;
+    case MODE_HIGH_CAPACITY:
+      return env_stride > 3 ? 3 : env_stride;
+    case MODE_BALANCED:
+    default:
+      return env_stride;
+  }
+}
+
 int main(int argc, char **argv) {
   int port = 9099;
   int k;
@@ -486,6 +736,15 @@ int main(int argc, char **argv) {
   for (k = 0; k < NUM_ARMS; ++k)
     ur_fd[k] = -1;
   scara_fd = -1;
+  memset(&workcell, 0, sizeof(workcell));
+  workcell.robot_enabled[0] = 1;
+  workcell.robot_enabled[1] = 1;
+  workcell.robot_enabled[2] = 1;
+  workcell.scara_enabled = 1;
+  workcell.can_line_enabled = 1;
+  workcell.fruit_line_enabled = 1;
+  workcell.mode = MODE_BALANCED;
+  workcell.target_type = TARGET_NONE;
 
   wb_robot_init();
   const int time_step = (int)wb_robot_get_basic_time_step();
@@ -502,7 +761,7 @@ int main(int argc, char **argv) {
     ArmState arms[NUM_ARMS] = {{WAITING, 0}, {WAITING, 0}, {WAITING, 0}};
     ArmTelemetry telemetry[NUM_ARMS];
     const int ur_phase_ticks = ur_phase_ticks_from_env();
-    const int scara_stride = scara_stride_from_env();
+    const int env_scara_stride = scara_stride_from_env();
     static unsigned scara_stride_ctr = 0;
 
     for (k = 0; k < NUM_ARMS; ++k) {
@@ -510,9 +769,10 @@ int main(int argc, char **argv) {
       telemetry[k].wrist = 0.0;
     }
     printf(LOG_PREFIX "UR phase ticks=%d (UR_SPEED_MULT, min 8 for grasp physics); SCARA coordinator stride=%d (SCARA_SPEED_DIV)\n",
-           ur_phase_ticks, scara_stride);
+           ur_phase_ticks, env_scara_stride);
 
     while (wb_robot_step(time_step) != -1) {
+      int scara_stride;
       accept_new();
       recv_clients(telemetry);
 
@@ -522,7 +782,7 @@ int main(int argc, char **argv) {
           if (arms[i].counter <= 0) {
             switch (arms[i].state) {
               case WAITING:
-                if (telemetry[i].distance < 500) {
+                if (workcell.robot_enabled[i] && workcell.can_line_enabled && telemetry[i].distance < 500) {
                   arms[i].state = GRASPING;
                   arms[i].counter = ur_phase_ticks;
                   send_arm_cmd(i, "GRASPING_CAN");
@@ -555,6 +815,7 @@ int main(int argc, char **argv) {
         }
       }
 
+      scara_stride = scara_stride_for_mode(env_scara_stride);
       if ((++scara_stride_ctr % (unsigned)scara_stride) == 0u)
         scara_coordinator_step();
       sim_wall_sleep_after_step(time_step);
