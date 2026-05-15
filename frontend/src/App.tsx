@@ -5,6 +5,7 @@ const AGENT_URL = import.meta.env.VITE_AGENT_URL ?? "http://127.0.0.1:8787";
 
 type Lines = string[];
 type Robots = "UR3e" | "UR5e" | "UR10e" | "ScaraT6";
+type View = "dashboard" | "logs";
 
 type Workcell = {
   mode: string;
@@ -23,6 +24,15 @@ type AgentEntry = {
 };
 
 const MAX = 400;
+const ROBOTS: Robots[] = ["UR3e", "UR5e", "UR10e", "ScaraT6"];
+const EXAMPLES = [
+  "Run balanced production",
+  "Increase can production",
+  "Prioritize fruit sorting",
+  "Handle 5 cans",
+  "Sort 6 fruits",
+  "Disable UR10e",
+];
 
 const DEFAULT_WORKCELL: Workcell = {
   mode: "balanced",
@@ -32,19 +42,6 @@ const DEFAULT_WORKCELL: Workcell = {
   armCans: { UR3e: 0, UR5e: 0, UR10e: 0 },
   target: { type: "none", count: 0 },
 };
-
-const EXAMPLES = [
-  "Run balanced production",
-  "Prioritize fruit handling until 6 fruits are sorted",
-  "Prioritize can handling",
-  "Run low power mode",
-  "Run high capacity mode",
-  "Disable UR10e and continue production",
-  "Stop fruit line",
-  "Handle 5 cans then return to balanced mode",
-  "Pause simulation",
-  "Generate a production summary",
-];
 
 function push(lines: Lines, line: string): Lines {
   const next = [...lines, line];
@@ -64,6 +61,14 @@ function classify(line: string): string {
   if (line.startsWith("STATE|")) return "line-state";
   if (line.startsWith("COUNT|")) return "line-count";
   return "line-recv";
+}
+
+function lineLabel(line: string) {
+  if (line.startsWith("CMD|")) return "Command";
+  if (line.startsWith("STATE|")) return "State";
+  if (line.startsWith("COUNT|")) return "Count";
+  if (line.startsWith("LOG|")) return "Log";
+  return "Event";
 }
 
 function routeLine(
@@ -95,7 +100,7 @@ function routeLine(
       };
       if (parts[1] === "mode") next.mode = parts[2] ?? state.mode;
       if (parts[1] === "line" && (parts[2] === "can" || parts[2] === "fruit")) next.lines[parts[2]] = parts[3] ?? "unknown";
-      if (parts[1] === "robot" && ["UR3e", "UR5e", "UR10e", "ScaraT6"].includes(parts[2] ?? ""))
+      if (parts[1] === "robot" && ROBOTS.includes((parts[2] ?? "") as Robots))
         next.robots[parts[2] as Robots] = parts[3] ?? "unknown";
       if (parts[1] === "target") next.target = { type: parts[2] ?? "none", count: Number(parts[3] ?? 0) };
       return next;
@@ -158,6 +163,8 @@ function routeLine(
 }
 
 export default function App() {
+  const [view, setView] = useState<View>("dashboard");
+  const [assistantOpen, setAssistantOpen] = useState(true);
   const [wsState, setWsState] = useState<"idle" | "open" | "closed">("idle");
   const [workcell, setWorkcell] = useState<Workcell>(DEFAULT_WORKCELL);
   const [ur3, setUr3] = useState<Lines>([]);
@@ -165,7 +172,7 @@ export default function App() {
   const [ur10, setUr10] = useState<Lines>([]);
   const [scara, setScara] = useState<Lines>([]);
   const [events, setEvents] = useState<Lines>([]);
-  const [prompt, setPrompt] = useState("Run balanced production");
+  const [prompt, setPrompt] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentLog, setAgentLog] = useState<AgentEntry[]>([
     {
@@ -175,6 +182,7 @@ export default function App() {
   ]);
   const wsRef = useRef<WebSocket | null>(null);
   const bufRef = useRef("");
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const connect = useCallback(() => {
     wsRef.current?.close();
@@ -206,22 +214,23 @@ export default function App() {
     return () => wsRef.current?.close();
   }, [connect]);
 
-  const sendControl = (cmd: string) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(cmd);
-  };
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: "end" });
+  }, [agentLog, agentBusy, assistantOpen]);
 
   const runAgent = async (message = prompt) => {
     const text = message.trim();
     if (!text || agentBusy) return;
-    setPrompt(text);
+    setView("dashboard");
+    setAssistantOpen(true);
+    setPrompt("");
     setAgentBusy(true);
     setAgentLog((x) => [...x, { role: "operator", text }]);
     try {
       const res = await fetch(`${AGENT_URL}/agent`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, context: workcell }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "agent request failed");
@@ -247,102 +256,274 @@ export default function App() {
     return { cls: "", text: "Connecting" };
   }, [wsState]);
 
+  const latestEvents = events.slice(-8).reverse();
+  const activeRobots = ROBOTS.filter((robot) => workcell.robots[robot] === "enabled").length;
+
   return (
-    <div className="app">
-      <header>
+    <div className={`app ${assistantOpen ? "with-assistant" : "assistant-collapsed"}`}>
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">F</div>
+          <div>
+            <strong>FactoryFlow</strong>
+            <span>Robotics Ops</span>
+          </div>
+        </div>
+
+        <nav className="nav">
+          <button type="button" className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>
+            <span className="nav-icon">D</span>
+            Dashboard
+          </button>
+          <button type="button" className={view === "logs" ? "active" : ""} onClick={() => setView("logs")}>
+            <span className="nav-icon">L</span>
+            Logs
+          </button>
+        </nav>
+
+        <div className="sidebar-status">
+          <span className={`status-dot ${status.cls}`} />
+          <div>
+            <strong>{status.text}</strong>
+            <span>TCP 9099 via WebSocket 8765</span>
+          </div>
+        </div>
+      </aside>
+
+      <section className="workspace">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Factory Manager Console</p>
+            <h1>{view === "dashboard" ? "Dashboard" : "Robot Logs"}</h1>
+          </div>
+          <div className="controls">
+            <button type="button" onClick={() => setAssistantOpen((open) => !open)}>
+              {assistantOpen ? "Hide Assistant" : "Show Assistant"}
+            </button>
+          </div>
+        </header>
+
+        <main className="content">
+          {view === "dashboard" && (
+            <Dashboard
+              activeRobots={activeRobots}
+              assistantOpen={assistantOpen}
+              latestEvents={latestEvents}
+              setView={setView}
+              setAssistantOpen={setAssistantOpen}
+              workcell={workcell}
+              runAgent={runAgent}
+            />
+          )}
+
+          {view === "logs" && <LogsView events={events} scara={scara} ur3={ur3} ur5={ur5} ur10={ur10} />}
+        </main>
+      </section>
+
+      <AssistantPanel
+        agentBusy={agentBusy}
+        agentLog={agentLog}
+        chatEndRef={chatEndRef}
+        open={assistantOpen}
+        prompt={prompt}
+        runAgent={runAgent}
+        setOpen={setAssistantOpen}
+        setPrompt={setPrompt}
+        workcell={workcell}
+      />
+    </div>
+  );
+}
+
+function Dashboard(props: {
+  activeRobots: number;
+  assistantOpen: boolean;
+  latestEvents: Lines;
+  setView: Dispatch<SetStateAction<View>>;
+  setAssistantOpen: Dispatch<SetStateAction<boolean>>;
+  workcell: Workcell;
+  runAgent: (message?: string) => Promise<void>;
+}) {
+  const {
+    activeRobots,
+    assistantOpen,
+    latestEvents,
+    setAssistantOpen,
+    setView,
+    workcell,
+    runAgent,
+  } = props;
+  const target = workcell.target.type === "none" ? "None" : `${workcell.target.count} ${workcell.target.type}`;
+
+  return (
+    <div className={`dashboard-grid ${assistantOpen ? "assistant-open" : "assistant-closed"}`}>
+      <section className="hero-panel">
         <div>
-          <h1>FactoryFlow Copilot</h1>
-          <p>Intent-based robotic workcell orchestration for UR can handling and ScaraT6 fruit sorting.</p>
+          <p className="eyebrow">Current Workcell Mode</p>
+          <h2>{titleCaseMode(workcell.mode)}</h2>
+          <div className="mode-meta">
+            <span>{activeRobots}/4 robots active</span>
+            <span>Can line {workcell.lines.can}</span>
+            <span>Fruit line {workcell.lines.fruit}</span>
+          </div>
         </div>
-        <div className="controls">
-          <span className={`badge ${status.cls}`}>{status.text}</span>
-          <button type="button" className="primary" onClick={() => sendControl("CONTROL RUN")}>
-            Run
+        <div className="hero-actions">
+          <button type="button" className="success" onClick={() => void runAgent("Run high capacity mode")}>
+            High Capacity
           </button>
-          <button type="button" onClick={() => sendControl("CONTROL PAUSE")}>
-            Pause
+          <button type="button" onClick={() => void runAgent("Run low power mode")}>
+            Low Power
           </button>
-          <button type="button" onClick={() => sendControl("CONTROL FAST")}>
-            Fast
-          </button>
-          <button type="button" onClick={connect}>
-            Reconnect
+          <button type="button" onClick={() => setAssistantOpen((open) => !open)}>
+            {assistantOpen ? "Collapse Assistant" : "Open Assistant"}
           </button>
         </div>
+      </section>
+
+      <section className="kpi-grid">
+        <Metric label="Production Target" value={target} />
+        <Metric label="Cans Handled" value={String(workcell.counts.cans)} />
+        <Metric label="Fruit Sorted" value={String(workcell.counts.fruits)} />
+        <Metric label="Apples / Oranges" value={`${workcell.counts.apples} / ${workcell.counts.oranges}`} />
+      </section>
+
+      <section className="section-block robots-block">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Robots</p>
+            <h2>Fleet Status</h2>
+          </div>
+          <span>{activeRobots} online</span>
+        </div>
+        <div className="robot-grid">
+          {ROBOTS.map((robot) => (
+            <RobotCard key={robot} robot={robot} state={workcell.robots[robot]} cans={robot === "ScaraT6" ? null : workcell.armCans[robot]} />
+          ))}
+        </div>
+      </section>
+
+      <section className="section-block lines-block">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Environment</p>
+            <h2>Line Overview</h2>
+          </div>
+        </div>
+        <div className="line-grid">
+          <LineCard name="Can Line" state={workcell.lines.can} detail={`${workcell.counts.cans} cans handled`} />
+          <LineCard name="Fruit Line" state={workcell.lines.fruit} detail={`${workcell.counts.fruits} fruit sorted`} />
+        </div>
+      </section>
+
+      <section className="section-block activity-block">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Live Events</p>
+            <h2>Recent Activity</h2>
+          </div>
+          <button type="button" onClick={() => setView("logs")}>
+            View Logs
+          </button>
+        </div>
+        <EventList lines={latestEvents} empty="No workcell events received yet." />
+      </section>
+    </div>
+  );
+}
+
+function AssistantPanel(props: {
+  agentBusy: boolean;
+  agentLog: AgentEntry[];
+  chatEndRef: React.RefObject<HTMLDivElement>;
+  open: boolean;
+  prompt: string;
+  runAgent: (message?: string) => Promise<void>;
+  setOpen: Dispatch<SetStateAction<boolean>>;
+  setPrompt: Dispatch<SetStateAction<string>>;
+  workcell: Workcell;
+}) {
+  const { agentBusy, agentLog, chatEndRef, open, prompt, runAgent, setOpen, setPrompt, workcell } = props;
+
+  if (!open) {
+    return (
+      <aside className="assistant-rail">
+        <button type="button" onClick={() => setOpen(true)}>
+          AI
+        </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="assistant-panel">
+      <header className="assistant-head">
+        <div>
+          <p className="eyebrow">FactoryFlow Copilot</p>
+          <h2>Assistant</h2>
+        </div>
+        <button type="button" onClick={() => setOpen(false)}>
+          Collapse
+        </button>
       </header>
 
-      <main className="shell">
-        <section className="command-center">
-          <div className="agent">
-            <div className="agent-head">
-              <h2>AI Command Center</h2>
-              <span>{agentBusy ? "planning" : "ready"}</span>
-            </div>
-            <form
-              className="prompt-row"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void runAgent();
-              }}
-            >
-              <input value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-              <button type="submit" className="primary" disabled={agentBusy}>
-                Send
-              </button>
-            </form>
-            <div className="examples">
-              {EXAMPLES.map((example) => (
-                <button key={example} type="button" onClick={() => void runAgent(example)}>
-                  {example}
-                </button>
-              ))}
-            </div>
-            <div className="conversation">
-              {agentLog.slice(-8).map((entry, index) => (
-                <div className={`bubble ${entry.role}`} key={`${entry.role}-${index}-${entry.text.slice(0, 16)}`}>
-                  <div className="bubble-role">{entry.role === "operator" ? "Operator" : `Copilot${entry.planner ? ` · ${entry.planner}` : ""}`}</div>
-                  <div>{entry.text}</div>
-                  {entry.commands && entry.commands.length > 0 && (
-                    <ul>
-                      {entry.commands.map((cmd) => (
-                        <li key={cmd}>{cmd}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="metrics">
-            <Metric label="Mode" value={titleCaseMode(workcell.mode)} />
-            <Metric label="Can Line" value={titleCaseMode(workcell.lines.can)} />
-            <Metric label="Fruit Line" value={titleCaseMode(workcell.lines.fruit)} />
-            <Metric label="Target" value={workcell.target.type === "none" ? "None" : `${workcell.target.count} ${workcell.target.type}`} />
-            <Metric label="Cans" value={String(workcell.counts.cans)} />
-            <Metric label="Apples" value={String(workcell.counts.apples)} />
-            <Metric label="Oranges" value={String(workcell.counts.oranges)} />
-            <Metric label="Fruits" value={String(workcell.counts.fruits)} />
-          </div>
-
-          <div className="robot-status">
-            {(Object.keys(workcell.robots) as Robots[]).map((robot) => (
-              <div className="robot-tile" key={robot}>
-                <span>{robot}</span>
-                <strong className={workcell.robots[robot] === "enabled" ? "enabled" : "disabled"}>{workcell.robots[robot]}</strong>
+      <section className="assistant-chat">
+        <div className="chat-feed">
+          {agentLog.map((entry, index) => (
+            <ChatMessage entry={entry} key={`${entry.role}-${index}-${entry.text.slice(0, 16)}`} />
+          ))}
+          {agentBusy && (
+            <div className="message-row agent">
+              <div className="avatar">AI</div>
+              <div className="message">
+                <div className="message-meta">Copilot</div>
+                <div>Planning validated workcell controls...</div>
               </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+
+        <div className="assistant-bottom">
+          <div className="prompt-suggestions compact-list">
+            {EXAMPLES.map((example) => (
+              <button key={example} type="button" onClick={() => void runAgent(example)}>
+                {example}
+              </button>
             ))}
           </div>
-        </section>
 
-        <section className="logs">
-          <Panel title="Workcell Events" lines={events} />
-          <Panel title="UR3e" lines={ur3} />
-          <Panel title="UR5e" lines={ur5} />
-          <Panel title="UR10e" lines={ur10} />
-          <Panel title="ScaraT6" lines={scara} />
-        </section>
-      </main>
+          <form
+            className="chat-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runAgent();
+            }}
+          >
+            <input
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Ask for a production change..."
+            />
+            <button type="submit" className="success" disabled={agentBusy}>
+              Send
+            </button>
+          </form>
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+function LogsView(props: { events: Lines; scara: Lines; ur3: Lines; ur5: Lines; ur10: Lines }) {
+  const { events, scara, ur3, ur5, ur10 } = props;
+
+  return (
+    <div className="logs-layout">
+      <Panel title="Workcell Events" lines={events} />
+      <Panel title="UR3e" lines={ur3} />
+      <Panel title="UR5e" lines={ur5} />
+      <Panel title="UR10e" lines={ur10} />
+      <Panel title="ScaraT6" lines={scara} />
     </div>
   );
 }
@@ -356,17 +537,89 @@ function Metric(props: { label: string; value: string }) {
   );
 }
 
+function RobotCard(props: { robot: Robots; state: string; cans: number | null }) {
+  const enabled = props.state === "enabled";
+  return (
+    <article className="robot-card">
+      <div className="robot-card-top">
+        <div className="robot-avatar">{props.robot === "ScaraT6" ? "ST" : props.robot.replace("e", "")}</div>
+        <span className={`pill ${enabled ? "ok" : "err"}`}>{props.state}</span>
+      </div>
+      <h3>{props.robot}</h3>
+      <p>{props.cans === null ? "Fruit sorting cell" : `${props.cans} cans handled`}</p>
+    </article>
+  );
+}
+
+function LineCard(props: { name: string; state: string; detail: string }) {
+  const running = props.state === "running";
+  return (
+    <article className="line-card">
+      <div>
+        <span className={`status-dot ${running ? "ok" : "err"}`} />
+        <h3>{props.name}</h3>
+      </div>
+      <strong>{titleCaseMode(props.state)}</strong>
+      <p>{props.detail}</p>
+    </article>
+  );
+}
+
+function ChatMessage(props: { entry: AgentEntry }) {
+  const { entry } = props;
+  const isAgent = entry.role === "agent";
+
+  return (
+    <div className={`message-row ${entry.role}`}>
+      <div className="avatar">{isAgent ? "AI" : "OP"}</div>
+      <div className="message">
+        <div className="message-meta">{isAgent ? `Copilot${entry.planner ? ` / ${entry.planner}` : ""}` : "Operator"}</div>
+        <div>{entry.text}</div>
+        {entry.commands && entry.commands.length > 0 && (
+          <div className="applied-changes">
+            <span>Applied changes</span>
+            {entry.commands.map((cmd) => (
+              <code key={cmd}>{cmd}</code>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EventList(props: { lines: Lines; empty: string }) {
+  if (!props.lines.length) return <p className="empty-state">{props.empty}</p>;
+  return (
+    <div className="event-list">
+      {props.lines.map((line, i) => (
+        <div key={`${i}-${line.slice(0, 24)}`} className="event-row">
+          <span className={classify(line)}>{lineLabel(line)}</span>
+          <code>{line}</code>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Panel(props: { title: string; lines: Lines }) {
   const { title, lines } = props;
   return (
     <section className="panel">
-      <header>{title}</header>
+      <header>
+        <span>{title}</span>
+        <strong>{lines.length}</strong>
+      </header>
       <pre className="body">
-        {lines.map((line, i) => (
-          <div key={`${i}-${line.slice(0, 24)}`} className={classify(line)}>
-            {line}
-          </div>
-        ))}
+        {lines.length === 0 ? (
+          <div className="empty-log">Waiting for events...</div>
+        ) : (
+          lines.map((line, i) => (
+            <div key={`${i}-${line.slice(0, 24)}`} className={classify(line)}>
+              {line}
+            </div>
+          ))
+        )}
       </pre>
     </section>
   );

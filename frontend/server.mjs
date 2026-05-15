@@ -1,6 +1,7 @@
 /**
  * Bridges browser WebSocket (dashboard) <-> coordinator TCP (REGISTER UI).
- * Env: COORDINATOR_TCP_PORT (default 9099), FRONTEND_WS_PORT (default 8765), AGENT_HTTP_PORT (default 8787).
+ * Env: COORDINATOR_TCP_PORT (default 9099), FRONTEND_WS_PORT (default 8765), AGENT_HTTP_PORT (default 8787),
+ * ADK_AGENT_URL (default http://127.0.0.1:8790/plan), USE_ADK (default enabled unless set to 0).
  */
 import http from "http";
 import net from "net";
@@ -9,6 +10,7 @@ import { WebSocketServer } from "ws";
 const TCP_PORT = parseInt(process.env.COORDINATOR_TCP_PORT || "9099", 10);
 const WS_PORT = parseInt(process.env.FRONTEND_WS_PORT || "8765", 10);
 const AGENT_PORT = parseInt(process.env.AGENT_HTTP_PORT || "8787", 10);
+const ADK_AGENT_URL = process.env.ADK_AGENT_URL || "http://127.0.0.1:8790/plan";
 
 const EXAMPLES = [
   "Run balanced production",
@@ -198,6 +200,29 @@ Request: ${message}`;
   return parsed;
 }
 
+async function adkPlan(message, context) {
+  if (process.env.USE_ADK === "0")
+    throw new Error("ADK planner is disabled by USE_ADK=0");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(ADK_AGENT_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message, context: context || {} }),
+      signal: controller.signal
+    });
+    if (!res.ok)
+      throw new Error(`ADK HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data || !Array.isArray(data.actions))
+      throw new Error("ADK returned invalid plan");
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function sendCoordinatorCommands(commands) {
   return new Promise((resolve) => {
     if (commands.length === 0) {
@@ -337,22 +362,14 @@ const agentServer = http.createServer(async (req, res) => {
       writeJson(res, 400, { error: "message is required" });
       return;
     }
-    let plan = null;
-    let planner = "local";
-    try {
-      plan = await geminiPlan(message);
-      if (plan) planner = "gemini";
-    } catch (err) {
-      plan = null;
-    }
-    if (!plan)
-      plan = localPlan(message);
+    const plan = await adkPlan(message, body.context || {});
+    const planner = plan.planner || "adk";
     const commands = plan.actions.map(commandForTool).filter(Boolean);
     const execution = await sendCoordinatorCommands(commands);
     const reply = execution.ok ? plan.reply : `${plan.reply} Coordinator is not connected yet, so the plan is staged in the UI but was not applied.`;
     writeJson(res, 200, { planner, reply, actions: plan.actions, commands, execution });
   } catch (err) {
-    writeJson(res, 500, { error: err.message });
+    writeJson(res, 502, { error: `Agent planning failed: ${err.message}` });
   }
 });
 
