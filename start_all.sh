@@ -6,7 +6,7 @@ export COORDINATOR_TCP_PORT="${COORDINATOR_TCP_PORT:-9099}"
 export FRONTEND_WS_PORT="${FRONTEND_WS_PORT:-8765}"
 export SIM_SLOWDOWN="${SIM_SLOWDOWN:-1}"
 export UR_SPEED_MULT="${UR_SPEED_MULT:-1}"
-export SCARA_SPEED_DIV="${SCARA_SPEED_DIV:-10}"
+export SCARA_SPEED_DIV="${SCARA_SPEED_DIV:-4}"
 WEBOTS_HOME="${WEBOTS_HOME:-/Applications/Webots.app}"
 WORLD="$ROOT/combined_world/worlds/ure_plus_scara.wbt"
 

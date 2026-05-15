@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,9 +53,16 @@ static void sim_wall_sleep_after_step(int timestep_ms) {
 
 #define NUM_ARMS 3
 #define MAX_CLIENTS 32
+#define NUM_CAN_CONVEYORS 3
 #define LOG_PREFIX "coordinator: "
 
 static const char *const ARM_NAME[NUM_ARMS] = {"UR3e", "UR5e", "UR10e"};
+static const char *const CAN_CONVEYOR_DEF[NUM_CAN_CONVEYORS] = {"CAN_CONVEYOR_LOWER", "CAN_CONVEYOR_UPPER",
+                                                                "CAN_CONVEYOR_FEED"};
+static WbFieldRef can_conveyor_speed_field[NUM_CAN_CONVEYORS];
+static double can_conveyor_base_speed[NUM_CAN_CONVEYORS];
+static WbFieldRef fruit_conveyor_speed_field;
+static double fruit_conveyor_base_speed;
 
 enum OperationMode { MODE_BALANCED, MODE_FRUIT_PRIORITY, MODE_CAN_PRIORITY, MODE_LOW_POWER, MODE_HIGH_CAPACITY };
 enum TargetType { TARGET_NONE, TARGET_CANS, TARGET_FRUITS, TARGET_APPLES, TARGET_ORANGES };
@@ -110,6 +118,7 @@ static int scara_fd = -1;
 
 static void send_arm_cmd(int arm_index, const char *cmd);
 static void send_scara_cmd(const char *msg);
+static void client_remove(int idx);
 
 static int set_nonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
@@ -156,7 +165,8 @@ static void ui_broadcast_raw(const char *msg, size_t len) {
   for (i = 0; i < MAX_CLIENTS; ++i) {
     if (clients[i].fd >= 0 && clients[i].role == ROLE_UI) {
       ssize_t w = write(clients[i].fd, msg, len);
-      (void)w;
+      if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+        client_remove(i);
     }
   }
 }
@@ -245,6 +255,82 @@ static int target_reached(void) {
   }
 }
 
+static void init_can_conveyor_speed_fields(void) {
+  int i;
+  for (i = 0; i < NUM_CAN_CONVEYORS; ++i) {
+    WbNodeRef node = wb_supervisor_node_get_from_def(CAN_CONVEYOR_DEF[i]);
+    can_conveyor_speed_field[i] = NULL;
+    can_conveyor_base_speed[i] = 0.0;
+    if (!node) {
+      printf(LOG_PREFIX "warning: missing conveyor DEF %s; can-priority belt speed will not affect it\n",
+             CAN_CONVEYOR_DEF[i]);
+      continue;
+    }
+    can_conveyor_speed_field[i] = wb_supervisor_node_get_field(node, "speed");
+    if (!can_conveyor_speed_field[i]) {
+      printf(LOG_PREFIX "warning: conveyor %s has no speed field\n", CAN_CONVEYOR_DEF[i]);
+      continue;
+    }
+    can_conveyor_base_speed[i] = wb_supervisor_field_get_sf_float(can_conveyor_speed_field[i]);
+  }
+  {
+    WbNodeRef node = wb_supervisor_node_get_from_def("FRUIT_CONVEYOR");
+    fruit_conveyor_speed_field = NULL;
+    fruit_conveyor_base_speed = 0.0;
+    if (!node) {
+      printf(LOG_PREFIX "warning: missing conveyor DEF FRUIT_CONVEYOR; fruit-priority belt speed will not affect it\n");
+      return;
+    }
+    fruit_conveyor_speed_field = wb_supervisor_node_get_field(node, "speed");
+    if (!fruit_conveyor_speed_field) {
+      printf(LOG_PREFIX "warning: conveyor FRUIT_CONVEYOR has no speed field\n");
+      return;
+    }
+    fruit_conveyor_base_speed = wb_supervisor_field_get_sf_float(fruit_conveyor_speed_field);
+  }
+}
+
+static double can_conveyor_multiplier_for_mode(enum OperationMode mode) {
+  switch (mode) {
+    case MODE_FRUIT_PRIORITY:
+    case MODE_LOW_POWER:
+      return 0.5;
+    case MODE_CAN_PRIORITY:
+    case MODE_HIGH_CAPACITY:
+      return 6.0;
+    case MODE_BALANCED:
+    default:
+      return 1.0;
+  }
+}
+
+static double fruit_conveyor_multiplier_for_mode(enum OperationMode mode) {
+  switch (mode) {
+    case MODE_FRUIT_PRIORITY:
+      return 3.0;
+    case MODE_CAN_PRIORITY:
+    case MODE_LOW_POWER:
+      return 0.5;
+    case MODE_HIGH_CAPACITY:
+      return 2.0;
+    case MODE_BALANCED:
+    default:
+      return 1.0;
+  }
+}
+
+static void apply_conveyor_speeds(void) {
+  int i;
+  const double can_multiplier = workcell.can_line_enabled ? can_conveyor_multiplier_for_mode(workcell.mode) : 0.0;
+  const double fruit_multiplier = workcell.fruit_line_enabled ? fruit_conveyor_multiplier_for_mode(workcell.mode) : 0.0;
+  for (i = 0; i < NUM_CAN_CONVEYORS; ++i) {
+    if (can_conveyor_speed_field[i])
+      wb_supervisor_field_set_sf_float(can_conveyor_speed_field[i], can_conveyor_base_speed[i] * can_multiplier);
+  }
+  if (fruit_conveyor_speed_field)
+    wb_supervisor_field_set_sf_float(fruit_conveyor_speed_field, fruit_conveyor_base_speed * fruit_multiplier);
+}
+
 static void maybe_complete_target(void) {
   if (!target_reached())
     return;
@@ -255,6 +341,7 @@ static void maybe_complete_target(void) {
   workcell.mode = MODE_BALANCED;
   workcell.can_line_enabled = 1;
   workcell.fruit_line_enabled = 1;
+  apply_conveyor_speeds();
   broadcast_state();
 }
 
@@ -279,6 +366,7 @@ static void apply_mode(enum OperationMode mode) {
   } else if (mode == MODE_LOW_POWER) {
     workcell.robot_enabled[2] = 0;
   }
+  apply_conveyor_speeds();
   log_and_ui(LOG_PREFIX "operation mode set to %s\n", mode_name(mode));
   broadcast_state();
 }
@@ -343,9 +431,11 @@ static void handle_ui_control_line(char *line) {
     int enabled = strcmp(b, "START") == 0;
     if (strcmp(a, "CAN") == 0) {
       workcell.can_line_enabled = enabled;
+      apply_conveyor_speeds();
       log_and_ui(LOG_PREFIX "can line %s\n", enabled ? "started" : "stopped");
     } else if (strcmp(a, "FRUIT") == 0) {
       workcell.fruit_line_enabled = enabled;
+      apply_conveyor_speeds();
       log_and_ui(LOG_PREFIX "fruit line %s\n", enabled ? "started" : "stopped");
       if (!enabled)
         send_scara_cmd("SCARA_HOME");
@@ -362,17 +452,24 @@ static void handle_ui_control_line(char *line) {
   }
   n = 0;
   if (sscanf(line, "CONTROL TARGET %63s %d", c, &n) == 2 && n > 0) {
-    if (strcmp(c, "CANS") == 0)
+    if (strcmp(c, "CANS") == 0) {
       workcell.target_type = TARGET_CANS;
-    else if (strcmp(c, "FRUITS") == 0)
+      workcell.mode = MODE_CAN_PRIORITY;
+    } else if (strcmp(c, "FRUITS") == 0) {
       workcell.target_type = TARGET_FRUITS;
-    else if (strcmp(c, "APPLES") == 0)
+      workcell.mode = MODE_FRUIT_PRIORITY;
+    } else if (strcmp(c, "APPLES") == 0) {
       workcell.target_type = TARGET_APPLES;
-    else if (strcmp(c, "ORANGES") == 0)
+      workcell.mode = MODE_FRUIT_PRIORITY;
+    } else if (strcmp(c, "ORANGES") == 0) {
       workcell.target_type = TARGET_ORANGES;
-    else
+      workcell.mode = MODE_FRUIT_PRIORITY;
+    } else
       return;
+    workcell.can_line_enabled = 1;
+    workcell.fruit_line_enabled = 1;
     workcell.target_count = n;
+    apply_conveyor_speeds();
     log_and_ui(LOG_PREFIX "production target set: %s %d\n", target_name(workcell.target_type), n);
     broadcast_state();
     return;
@@ -618,47 +715,73 @@ static void scara_coordinator_step(void) {
   static int i = 0;
   static int fruitType = 0;
   static int sorted_this_cycle = 0;
+  static int last_phase = -1;
   char buf[80];
+  int phase;
 
   if (scara_fd < 0 || !workcell.scara_enabled || !workcell.fruit_line_enabled)
     return;
 
-  if (i == 0) {
+  if (i > 275) {
+    i = 0;
+    last_phase = -1;
+  }
+
+  if (i == 0)
+    phase = 0;
+  else if (i > 200)
+    phase = 5;
+  else if (i > 125)
+    phase = 4;
+  else if (i > 90)
+    phase = 3;
+  else if (i > 75)
+    phase = 2;
+  else if (i > 55)
+    phase = 1;
+  else
+    phase = last_phase;
+
+  if (phase == last_phase) {
+    i++;
+    return;
+  }
+  last_phase = phase;
+
+  if (phase == 0) {
     sorted_this_cycle = 0;
     send_scara_cmd("SCARA_HOME");
-  } else if (i > 275) {
-    i = -1;
-  } else if (i > 200) {
+  } else if (phase == 5) {
     fruitType = rand() % 2;
     snprintf(buf, sizeof(buf), "SCARA_SET_FRUIT %d", fruitType);
     send_scara_cmd(buf);
-  } else if (i > 90) {
+  } else if (phase == 4) {
     send_scara_cmd("SCARA_MERGE");
-    if (i > 125) {
-      if (fruitType) {
-        send_scara_cmd("SCARA_SORT_ORANGE");
-        if (!sorted_this_cycle) {
-          workcell.oranges++;
-          sorted_this_cycle = 1;
-          ui_broadcast_fmt("COUNT|oranges|%d\n", workcell.oranges);
-          ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
-          maybe_complete_target();
-        }
-      } else {
-        send_scara_cmd("SCARA_SORT_APPLE");
-        if (!sorted_this_cycle) {
-          workcell.apples++;
-          sorted_this_cycle = 1;
-          ui_broadcast_fmt("COUNT|apples|%d\n", workcell.apples);
-          ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
-          maybe_complete_target();
-        }
+    if (fruitType) {
+      send_scara_cmd("SCARA_SORT_ORANGE");
+      if (!sorted_this_cycle) {
+        workcell.oranges++;
+        sorted_this_cycle = 1;
+        ui_broadcast_fmt("COUNT|oranges|%d\n", workcell.oranges);
+        ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
+        maybe_complete_target();
       }
-    } else
-      send_scara_cmd("SCARA_SHAFT_UP");
-  } else if (i > 75) {
+    } else {
+      send_scara_cmd("SCARA_SORT_APPLE");
+      if (!sorted_this_cycle) {
+        workcell.apples++;
+        sorted_this_cycle = 1;
+        ui_broadcast_fmt("COUNT|apples|%d\n", workcell.apples);
+        ui_broadcast_fmt("COUNT|fruits|%d\n", workcell.apples + workcell.oranges);
+        maybe_complete_target();
+      }
+    }
+  } else if (phase == 3) {
     send_scara_cmd("SCARA_MERGE");
-  } else if (i > 55) {
+    send_scara_cmd("SCARA_SHAFT_UP");
+  } else if (phase == 2) {
+    send_scara_cmd("SCARA_MERGE");
+  } else if (phase == 1) {
     send_scara_cmd("SCARA_SHAFT_DOWN");
   }
 
@@ -691,7 +814,7 @@ static int ur_phase_ticks_from_env(void) {
 /* Run scara_coordinator_step only every N supervisor steps (slow SCARA script vs sim time). */
 static int scara_stride_from_env(void) {
   const char *e = getenv("SCARA_SPEED_DIV");
-  int div = 10;
+  int div = 4;
   if (e && e[0]) {
     div = atoi(e);
     if (div < 1)
@@ -711,7 +834,7 @@ static int scara_stride_for_mode(int env_stride) {
     case MODE_LOW_POWER:
       return env_stride < 24 ? 24 : env_stride;
     case MODE_HIGH_CAPACITY:
-      return env_stride > 3 ? 3 : env_stride;
+      return env_stride > 2 ? 2 : env_stride;
     case MODE_BALANCED:
     default:
       return env_stride;
@@ -724,6 +847,7 @@ int main(int argc, char **argv) {
   const char *env_port;
   (void)argc;
   (void)argv;
+  signal(SIGPIPE, SIG_IGN);
   env_port = getenv("COORDINATOR_TCP_PORT");
   if (env_port && env_port[0])
     port = atoi(env_port);
@@ -748,6 +872,7 @@ int main(int argc, char **argv) {
 
   wb_robot_init();
   const int time_step = (int)wb_robot_get_basic_time_step();
+  init_can_conveyor_speed_fields();
 
   listen_fd = tcp_listen(port);
   if (listen_fd < 0) {

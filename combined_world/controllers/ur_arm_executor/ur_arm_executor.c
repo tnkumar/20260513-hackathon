@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h> /* getenv */
 #include <string.h>
@@ -150,6 +151,7 @@ static void drain_socket_commands(int *sock_ptr, char *line_buf, size_t *line_le
 }
 
 int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
   wb_robot_init();
   const int time_step = (int)wb_robot_get_basic_time_step();
   double speed = 1.0;
