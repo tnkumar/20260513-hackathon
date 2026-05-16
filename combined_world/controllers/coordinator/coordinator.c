@@ -341,6 +341,11 @@ static void maybe_complete_target(void) {
   workcell.mode = MODE_BALANCED;
   workcell.can_line_enabled = 1;
   workcell.fruit_line_enabled = 1;
+  workcell.robot_enabled[0] = 1;
+  workcell.robot_enabled[1] = 1;
+  workcell.robot_enabled[2] = 1;
+  workcell.scara_enabled = 1;
+  send_arm_cmd(2, "ROTATING_ARM_BACK");
   apply_conveyor_speeds();
   broadcast_state();
 }
@@ -363,8 +368,19 @@ static void apply_mode(enum OperationMode mode) {
     workcell.robot_enabled[1] = 1;
     workcell.robot_enabled[2] = 1;
     workcell.scara_enabled = 1;
+    send_arm_cmd(2, "ROTATING_ARM_BACK");
+  } else if (mode == MODE_CAN_PRIORITY) {
+    workcell.robot_enabled[0] = 1;
+    workcell.robot_enabled[1] = 1;
+    workcell.robot_enabled[2] = 1;
+    workcell.scara_enabled = 1;
+    send_arm_cmd(2, "ROTATING_ARM_BACK");
+  } else if (mode == MODE_FRUIT_PRIORITY) {
+    workcell.robot_enabled[2] = 0;
+    send_arm_cmd(2, "STOW_AWAY");
   } else if (mode == MODE_LOW_POWER) {
     workcell.robot_enabled[2] = 0;
+    send_arm_cmd(2, "STOW_AWAY");
   }
   apply_conveyor_speeds();
   log_and_ui(LOG_PREFIX "operation mode set to %s\n", mode_name(mode));
@@ -416,7 +432,9 @@ static void handle_ui_control_line(char *line) {
       workcell.robot_enabled[ai] = enabled;
       log_and_ui(LOG_PREFIX "%s %s by operator\n", ARM_NAME[ai], enabled ? "enabled" : "disabled");
       if (!enabled)
-        send_arm_cmd(ai, "WAITING");
+        send_arm_cmd(ai, ai == 2 ? "STOW_AWAY" : "WAITING");
+      else if (ai == 2)
+        send_arm_cmd(ai, "ROTATING_ARM_BACK");
       broadcast_state();
     } else if (strcmp(b, "ScaraT6") == 0) {
       workcell.scara_enabled = enabled;
@@ -455,15 +473,23 @@ static void handle_ui_control_line(char *line) {
     if (strcmp(c, "CANS") == 0) {
       workcell.target_type = TARGET_CANS;
       workcell.mode = MODE_CAN_PRIORITY;
+      workcell.robot_enabled[2] = 1;
+      send_arm_cmd(2, "ROTATING_ARM_BACK");
     } else if (strcmp(c, "FRUITS") == 0) {
       workcell.target_type = TARGET_FRUITS;
       workcell.mode = MODE_FRUIT_PRIORITY;
+      workcell.robot_enabled[2] = 0;
+      send_arm_cmd(2, "STOW_AWAY");
     } else if (strcmp(c, "APPLES") == 0) {
       workcell.target_type = TARGET_APPLES;
       workcell.mode = MODE_FRUIT_PRIORITY;
+      workcell.robot_enabled[2] = 0;
+      send_arm_cmd(2, "STOW_AWAY");
     } else if (strcmp(c, "ORANGES") == 0) {
       workcell.target_type = TARGET_ORANGES;
       workcell.mode = MODE_FRUIT_PRIORITY;
+      workcell.robot_enabled[2] = 0;
+      send_arm_cmd(2, "STOW_AWAY");
     } else
       return;
     workcell.can_line_enabled = 1;
@@ -904,10 +930,15 @@ int main(int argc, char **argv) {
       {
         int i;
         for (i = 0; i < NUM_ARMS; i++) {
+          if (!workcell.robot_enabled[i]) {
+            arms[i].state = WAITING;
+            arms[i].counter = 0;
+            continue;
+          }
           if (arms[i].counter <= 0) {
             switch (arms[i].state) {
               case WAITING:
-                if (workcell.robot_enabled[i] && workcell.can_line_enabled && telemetry[i].distance < 500) {
+                if (workcell.can_line_enabled && telemetry[i].distance < 500) {
                   arms[i].state = GRASPING;
                   arms[i].counter = ur_phase_ticks;
                   send_arm_cmd(i, "GRASPING_CAN");

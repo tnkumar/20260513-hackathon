@@ -1,6 +1,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
+import uuid
 
 from factory_agent import plan
 
@@ -41,14 +42,21 @@ class Handler(BaseHTTPRequestHandler):
             if not message:
                 self._json(400, {"error": "message is required"})
                 return
-            self._json(200, plan(message, body.get("context") or {}))
+            request_id = str(body.get("request_id") or uuid.uuid4().hex[:8])
+            context = body.get("context") or {}
+            print(f"adk-agent[{request_id}]: prompt={message!r}", flush=True)
+            print(f"adk-agent[{request_id}]: context={json.dumps(context, sort_keys=True)}", flush=True)
+            result = plan(message, context, request_id=request_id)
+            print(f"adk-agent[{request_id}]: result={json.dumps(result, sort_keys=True)}", flush=True)
+            self._json(200, result)
         except Exception as exc:
+            print(f"adk-agent: error={exc}", flush=True)
             self._json(500, {"error": str(exc)})
 
     def log_message(self, fmt, *args):
-        print("adk-agent:", fmt % args)
+        print("adk-agent:", fmt % args, flush=True)
 
 
 if __name__ == "__main__":
-    print(f"adk-agent: http://{HOST}:{PORT}/plan")
+    print(f"adk-agent: http://{HOST}:{PORT}/plan", flush=True)
     HTTPServer((HOST, PORT), Handler).serve_forever()

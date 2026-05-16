@@ -46,7 +46,7 @@ def set_operation_mode(mode: str) -> dict:
     mode meanings:
     - balanced: normal steady operation for both can and fruit lines.
     - can_priority: optimize the cell toward can output and UR can handling.
-    - fruit_priority: optimize the cell toward fruit/apple/orange sorting and ScaraT6 work.
+    - fruit_priority: optimize the cell toward fruit/apple/orange sorting, increase ScaraT6 work, and remove UR10e from can handling while fruit is prioritized.
     - low_power: reduce energy use and run a lighter production strategy.
     - high_capacity: maximize total throughput across the whole workcell.
 
@@ -201,7 +201,7 @@ Decision procedure:
 - If the message includes a numeric quantity goal, choose set_production_target.
 - If the message names a specific robot and asks to make it available or unavailable, choose enable_robot or disable_robot.
 - If the message names a specific line/conveyor and asks to start or stop material flow, choose start_line or stop_line.
-- If the message is about the Webots simulation clock itself, choose pause_simulation, resume_simulation, or fast_simulation.
+- If the message is about the Webots simulation clock itself, choose pause_simulation, resume_simulation, or fast_simulation. Do not use simulation tools for production throughput, line flow, or quantity requests.
 - If the message asks what is happening, asks for counts, asks for a report, asks whether something is running, or asks for diagnosis without requesting a change, choose get_workcell_status.
 - When wording is informal, infer the operational goal from the object and desired direction. For example, an operator asking for more of an item type is asking to prioritize that item type, not asking for status.
 
@@ -224,7 +224,7 @@ Decision procedure:
 
 Mode behavior the operator expects:
 - balanced starts both can and fruit lines at normal speed.
-- fruit_priority starts both lines, increases ScaraT6 cadence, increases fruit conveyor speed, and reduces can conveyor speed to half.
+- fruit_priority starts both lines, disables UR10e can handling, moves UR10e away from the conveyor, increases ScaraT6 cadence, increases fruit conveyor speed, and reduces can conveyor speed to half.
 - can_priority starts both lines, increases can conveyor speed, and reduces fruit/ScaraT6 priority.
 - low_power starts both lines, disables UR10e, slows ScaraT6, and reduces can conveyor speed to half.
 - high_capacity starts both lines, enables all robots, increases can conveyor speed, increases fruit conveyor speed, and uses the fastest ScaraT6 cadence.
@@ -297,10 +297,20 @@ Operator: "Stop feeding fruit for now."
 Tool: stop_line with line="fruit_line"
 Response: "I planned to stop the fruit line."
 
+Operator intent: hold physical material flow on one line.
+Operator: "Hold the can line for now."
+Tool: stop_line with line="can_line"
+Response: "I planned to stop the can line."
+
 Operator intent: resume physical material flow on one line.
 Operator: "Start the cans again."
 Tool: start_line with line="can_line"
 Response: "I planned to start the can line."
+
+Operator intent: resume physical material flow on one line.
+Operator: "Resume the fruit line."
+Tool: start_line with line="fruit_line"
+Response: "I planned to start the fruit line."
 
 Operator intent: ask for information, not a production change.
 Operator: "Give me a production report."
@@ -317,8 +327,18 @@ Operator: "Run everything as fast as possible."
 Tool: set_operation_mode with mode="high_capacity"
 Response: "I planned high-capacity production."
 
+Operator intent: maximize total workcell output, not one category.
+Operator: "Run the cell at maximum throughput."
+Tool: set_operation_mode with mode="high_capacity"
+Response: "I planned high-capacity production."
+
 Operator intent: reduce energy use while continuing production.
 Operator: "Save energy but keep production moving."
+Tool: set_operation_mode with mode="low_power"
+Response: "I planned low-power production."
+
+Operator intent: reduce energy use while continuing production.
+Operator: "Let's save power."
 Tool: set_operation_mode with mode="low_power"
 Response: "I planned low-power production."
 """
@@ -366,7 +386,8 @@ async def _run_adk_async(message, context):
         raise RuntimeError("GOOGLE_API_KEY or Vertex AI env is required for ADK model calls")
 
     LlmAgent, Runner, InMemorySessionService, Content, Part = loaded
-    model = os.environ.get("ADK_MODEL", "gemini-flash-latest")
+    model = os.environ.get("ADK_MODEL", "gemini-3-flash-preview")
+    print(f"adk-agent: using model={model}", flush=True)
     agent = LlmAgent(
         model=model,
         name="factoryflow_copilot",
@@ -417,79 +438,163 @@ def _number_from(text):
 def _fallback_plan(message):
     text = _normalize(message)
     actions = []
-    reply = "I mapped the request through the ADK service fallback planner."
+    reply = "I mapped the request through the deterministic demo planner."
 
     def add(tool, args=None):
         actions.append({"tool": tool, "args": args or {}})
 
-    if "summary" in text or "status" in text or "report" in text:
-        add("get_workcell_status")
-        return {"planner": "adk-fallback", "reply": "I requested the current workcell status.", "actions": actions}
-    if "pause" in text or "stop simulation" in text:
-        add("pause_simulation")
-        return {"planner": "adk-fallback", "reply": "Pausing the Webots simulation.", "actions": actions}
-    if "resume" in text or "run simulation" in text or text == "run":
-        add("resume_simulation")
-        return {"planner": "adk-fallback", "reply": "Resuming the Webots simulation.", "actions": actions}
-    if "fast" in text:
-        add("fast_simulation")
-
     for robot in ["UR3e", "UR5e", "UR10e", "ScaraT6"]:
         token = robot.lower()
-        if token in text and ("disable" in text or "down" in text or "maintenance" in text):
+        if token in text and (
+            "disable" in text
+            or "down" in text
+            or "maintenance" in text
+            or "offline" in text
+            or "take" in text
+            or "remove" in text
+        ):
             add("disable_robot", {"robot": robot})
-        if token in text and ("enable" in text or "re enable" in text or "reenable" in text):
+        if token in text and (
+            "enable" in text
+            or "re enable" in text
+            or "reenable" in text
+            or "bring" in text
+            or "back" in text
+            or "restore" in text
+        ):
             add("enable_robot", {"robot": robot})
 
-    if ("start can" in text) or ("can conveyor" in text and "start" in text):
+    if (
+        ("start can" in text)
+        or ("resume can" in text)
+        or ("restart can" in text)
+        or ("can line" in text and ("resume" in text or "restart" in text or "start" in text))
+        or ("can conveyor" in text and ("resume" in text or "restart" in text or "start" in text))
+        or ("feeding can" in text and "again" in text)
+    ):
         add("start_line", {"line": "can_line"})
-    if ("stop can" in text) or ("can conveyor" in text and "stop" in text):
+        reply = "Resuming the can line."
+    if (
+        ("stop can" in text)
+        or ("can conveyor" in text and "stop" in text)
+        or ("can line" in text and ("hold" in text or "pause" in text or "stop" in text or "halt" in text))
+        or ("hold" in text and "can" in text)
+    ):
         add("stop_line", {"line": "can_line"})
-    if ("start fruit" in text) or ("fruit conveyor" in text and "start" in text):
+        reply = "Holding the can line."
+    if (
+        ("start fruit" in text)
+        or ("resume fruit" in text)
+        or ("restart fruit" in text)
+        or ("fruit line" in text and ("resume" in text or "restart" in text or "start" in text))
+        or ("fruit conveyor" in text and ("resume" in text or "restart" in text or "start" in text))
+        or ("feeding fruit" in text and "again" in text)
+    ):
         add("start_line", {"line": "fruit_line"})
-    if ("stop fruit" in text) or ("fruit conveyor" in text and "stop" in text):
+        reply = "Resuming the fruit line."
+    if (
+        ("stop fruit" in text)
+        or ("fruit conveyor" in text and "stop" in text)
+        or ("fruit line" in text and ("hold" in text or "pause" in text or "stop" in text or "halt" in text))
+        or ("hold" in text and "fruit" in text)
+    ):
         add("stop_line", {"line": "fruit_line"})
+        reply = "Holding the fruit line."
 
-    if "balanced" in text:
+    count = _number_from(text)
+    if count > 0 and ("apple" in text or "orange" in text or "fruit" in text or "can" in text or "cans" in text):
+        if "apple" in text:
+            add("set_production_target", {"item_type": "apples", "count": count})
+            reply = f"Setting an apples target of {count}."
+        elif "orange" in text:
+            add("set_production_target", {"item_type": "oranges", "count": count})
+            reply = f"Setting an oranges target of {count}."
+        elif "fruit" in text:
+            add("set_production_target", {"item_type": "fruits", "count": count})
+            reply = f"Setting a fruits target of {count}."
+        else:
+            add("set_production_target", {"item_type": "cans", "count": count})
+            reply = f"Setting a cans target of {count}."
+    elif "balanced" in text or "normal production" in text or "back to normal" in text or "go back to normal" in text:
         add("set_operation_mode", {"mode": "balanced"})
         reply = "Running balanced production."
-    elif "fruit" in text and ("prioritize" in text or "priority" in text):
+    elif ("fruit" in text or "apple" in text or "orange" in text or "sorting" in text) and (
+        "prioritize" in text
+        or "priority" in text
+        or "increase" in text
+        or "boost" in text
+        or "speed" in text
+        or "focus" in text
+        or "more" in text
+        or "falling behind" in text
+    ):
         add("set_operation_mode", {"mode": "fruit_priority"})
         reply = "Prioritizing fruit handling."
-    elif ("can" in text or "cans" in text) and ("prioritize" in text or "priority" in text):
+    elif ("can" in text or "cans" in text) and (
+        "prioritize" in text
+        or "priority" in text
+        or "increase" in text
+        or "boost" in text
+        or "speed" in text
+        or "more" in text
+        or "need" in text
+        or "coming through" in text
+    ):
         add("set_operation_mode", {"mode": "can_priority"})
         reply = "Prioritizing can handling."
-    elif "low power" in text or "energy" in text:
+    elif "low power" in text or "energy" in text or "save power" in text or "conserve power" in text:
         add("set_operation_mode", {"mode": "low_power"})
         reply = "Switching to low power mode."
-    elif "high capacity" in text or "max capacity" in text or "throughput" in text:
+    elif "high capacity" in text or "max capacity" in text or "throughput" in text or "maximum" in text or "flat out" in text:
         add("set_operation_mode", {"mode": "high_capacity"})
         reply = "Switching to high capacity mode."
 
-    count = _number_from(text)
-    if count > 0:
-        if "apple" in text:
-            add("set_production_target", {"item_type": "apples", "count": count})
-        elif "orange" in text:
-            add("set_production_target", {"item_type": "oranges", "count": count})
-        elif "fruit" in text:
-            add("set_production_target", {"item_type": "fruits", "count": count})
-        elif "can" in text:
-            add("set_production_target", {"item_type": "cans", "count": count})
+    if not actions:
+        if (
+            "summary" in text
+            or "status" in text
+            or "report" in text
+            or "production report" in text
+            or "how is production" in text
+            or "how are we doing" in text
+            or "what is happening" in text
+        ):
+            add("get_workcell_status")
+            return {"planner": "deterministic-fallback", "reply": "I requested the current workcell status.", "actions": actions}
+        if "pause simulation" in text or "stop simulation" in text:
+            add("pause_simulation")
+            return {"planner": "deterministic-fallback", "reply": "Pausing the Webots simulation.", "actions": actions}
+        if "resume simulation" in text or "run simulation" in text or text == "run":
+            add("resume_simulation")
+            return {"planner": "deterministic-fallback", "reply": "Resuming the Webots simulation.", "actions": actions}
+        if "fast simulation" in text or "speed up simulation" in text:
+            add("fast_simulation")
+            reply = "Running the Webots simulation as fast as possible."
 
     if not actions:
         add("get_workcell_status")
         reply = "I requested status because the request did not map to a direct workcell command."
-    return {"planner": "adk-fallback", "reply": reply, "actions": actions}
+    return {"planner": "deterministic-fallback", "reply": reply, "actions": actions}
 
 
-def plan(message, context=None):
+def plan(message, context=None, request_id=None):
     actions = []
     token = ACTIONS.set(actions)
     try:
-        reply = asyncio.run(_run_adk_async(message, context or {}))
-        if not actions:
-            raise RuntimeError("ADK did not call a workcell tool")
-        return {"planner": "adk", "reply": reply or "I planned validated workcell controls.", "actions": actions}
+        rid = request_id or "unknown"
+        try:
+            print(f"adk-agent[{rid}]: invoking Google ADK model", flush=True)
+            reply = asyncio.run(_run_adk_async(message, context or {}))
+            if not actions:
+                raise RuntimeError("ADK did not call a workcell tool")
+            print(f"adk-agent[{rid}]: adk_reply={reply!r}", flush=True)
+            print(f"adk-agent[{rid}]: tool_actions={json.dumps(actions, sort_keys=True)}", flush=True)
+            return {"planner": "adk", "reply": reply or "I planned validated workcell controls.", "actions": actions}
+        except Exception as exc:
+            print(f"adk-agent[{rid}]: ADK failed; using deterministic fallback: {exc}", flush=True)
+            fallback = _fallback_plan(message)
+            fallback["adk_error"] = str(exc)
+            print(f"adk-agent[{rid}]: fallback_result={json.dumps(fallback, sort_keys=True)}", flush=True)
+            return fallback
     finally:
         ACTIONS.reset(token)

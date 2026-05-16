@@ -62,31 +62,58 @@ if coord_sock is None:
 
 merged_tool = False
 fruitType = 0
+attached_fruit = None
 step = 0
 
 
-def merge_tool(fruit_id, merged_tool):
-    if not merged_tool:
-        fruit = supervisor.getFromDef("fruit" + str(fruit_id))
-        vaccum = supervisor.getFromDef("VACCUM")
-        if fruit:
-            poses = vaccum.getPosition()
-            fruitTranslation = fruit.getField('translation')
-            if fruitTranslation and poses:
-                fruitTranslation.setSFVec3f([poses[0], poses[1], poses[2] - 0.07])
-                fruit.resetPhysics()
+def move_fruit_to_vacuum(fruit_id):
+    fruit = supervisor.getFromDef("fruit" + str(fruit_id))
+    vacuum = supervisor.getFromDef("VACCUM")
+    if not fruit or not vacuum:
+        return
+
+    vacuum_world = vacuum.getPosition()
+    fruit_world = fruit.getPosition()
+    fruit_translation = fruit.getField("translation")
+    if not fruit_translation or not vacuum_world or not fruit_world:
+        return
+
+    fruit_local = fruit_translation.getSFVec3f()
+    parent_offset = [
+        fruit_world[0] - fruit_local[0],
+        fruit_world[1] - fruit_local[1],
+        fruit_world[2] - fruit_local[2],
+    ]
+    fruit_translation.setSFVec3f([
+        vacuum_world[0] - parent_offset[0],
+        vacuum_world[1] - parent_offset[1],
+        vacuum_world[2] - parent_offset[2] - 0.07,
+    ])
+    fruit.resetPhysics()
+
+
+def attach_fruit(fruit_id):
+    global attached_fruit
+    attached_fruit = fruit_id
+    move_fruit_to_vacuum(fruit_id)
+
+
+def release_fruit():
+    global attached_fruit
+    attached_fruit = None
 
 
 def handle_command(msg):
     global fruitType
     msg = msg.strip()
     if msg == "SCARA_HOME":
+        release_fruit()
         arm.setPosition(0.6)
         base_arm.setPosition(0.2)
     elif msg == "SCARA_SHAFT_DOWN":
         shaft_linear.setPosition(-0.148)
     elif msg == "SCARA_MERGE":
-        merge_tool(fruitType, merged_tool)
+        attach_fruit(fruitType)
     elif msg == "SCARA_SHAFT_UP":
         shaft_linear.setPosition(0)
     elif msg == "SCARA_SORT_ORANGE":
@@ -138,5 +165,7 @@ while supervisor.step(timestep) != -1:
     step += 1
 
     poll_socket_commands()
+    if attached_fruit is not None:
+        move_fruit_to_vacuum(attached_fruit)
     if SIM_SLOWDOWN > 1:
         time.sleep((SIM_SLOWDOWN - 1) * timestep / 1000.0)

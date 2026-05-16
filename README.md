@@ -235,7 +235,7 @@ You can also use Vertex AI instead of `GOOGLE_API_KEY` if your ADK environment i
 Optional model override:
 
 ```bash
-export ADK_MODEL="gemini-flash-latest"
+export ADK_MODEL="gemini-3-flash-preview"
 ```
 
 ### 2. Install frontend dependencies

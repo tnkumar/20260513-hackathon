@@ -1,8 +1,16 @@
 :root {
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f3f6f8;
-  color: #111827;
+  background: #f8fafc;
+  color: #0b1020;
+  --accent: #ff7a00;
+  --accent-dark: #ea580c;
+  --accent-soft: #fff4e8;
+  --ink: #0b1020;
+  --muted: #506078;
+  --line: #e2e8f0;
+  --panel: #ffffff;
+  --navy: #101827;
 }
 
 * {
@@ -11,15 +19,19 @@
 
 body {
   margin: 0;
-  background: #f3f6f8;
+  background: #f8fafc;
 }
 
 .app {
   display: grid;
   grid-template-columns: 252px minmax(0, 1fr) 392px;
   min-height: 100vh;
-  background: #f3f6f8;
-  color: #111827;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.78), rgba(248, 250, 252, 0.92)),
+    linear-gradient(90deg, rgba(255, 122, 0, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+  background-size: auto, 24px 24px, 24px 24px;
+  color: var(--ink);
 }
 
 .app.assistant-collapsed {
@@ -32,9 +44,9 @@ body {
   gap: 24px;
   min-height: 100vh;
   padding: 22px 16px;
-  border-right: 1px solid #d9e0e7;
-  background: #0f1720;
-  color: #eef4f8;
+  border-right: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink);
 }
 
 .brand {
@@ -47,28 +59,36 @@ body {
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
-  background: #2f855a;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent), #ff9f1c);
   color: #ffffff;
+  box-shadow: 0 12px 24px rgba(255, 122, 0, 0.22);
+  font-size: 12px;
   font-weight: 800;
 }
 
 .brand strong,
-.brand span,
+.brand small,
 .sidebar-status strong,
 .sidebar-status span {
   display: block;
 }
 
 .brand strong {
+  color: var(--ink);
   font-size: 16px;
 }
 
-.brand span,
+.brand strong span {
+  display: inline;
+  color: var(--accent);
+}
+
+.brand small,
 .sidebar-status span {
-  color: #9aa8b6;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -94,18 +114,18 @@ button {
   width: 100%;
   min-height: 40px;
   padding: 0 10px;
-  color: #b7c3ce;
+  color: #475569;
   text-align: left;
 }
 
 .nav button:hover,
 .nav button.active {
-  background: #182330;
-  color: #ffffff;
+  background: var(--accent-soft);
+  color: var(--ink);
 }
 
 .nav button.active {
-  border-color: #314255;
+  border-color: #fed7aa;
 }
 
 .nav-icon {
@@ -114,8 +134,8 @@ button {
   width: 24px;
   height: 24px;
   border-radius: 6px;
-  background: #243242;
-  color: #dce8f1;
+  background: #fff7ed;
+  color: var(--accent-dark);
   font-size: 12px;
   font-weight: 800;
 }
@@ -126,9 +146,9 @@ button {
   gap: 10px;
   margin-top: auto;
   padding: 12px;
-  border: 1px solid #263545;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #121d28;
+  background: #fffaf5;
 }
 
 .workspace {
@@ -145,8 +165,9 @@ button {
   gap: 18px;
   min-height: 78px;
   padding: 16px 28px;
-  border-bottom: 1px solid #d9e0e7;
-  background: #ffffff;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
 }
 
 .topbar h1,
@@ -161,13 +182,13 @@ button {
 
 .topbar h1 {
   margin-top: 2px;
-  color: #101820;
+  color: var(--ink);
   font-size: 22px;
   line-height: 1.1;
 }
 
 .eyebrow {
-  color: #64748b;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0;
@@ -184,7 +205,7 @@ button {
 button {
   min-height: 36px;
   padding: 0 13px;
-  border-color: #cad3dd;
+  border-color: #cfd8e3;
   background: #ffffff;
   color: #1f2937;
   font-size: 14px;
@@ -192,8 +213,8 @@ button {
 }
 
 button:hover {
-  border-color: #9aa8b6;
-  background: #f6f8fa;
+  border-color: #fdba74;
+  background: #fff7ed;
 }
 
 button:disabled {
@@ -202,14 +223,15 @@ button:disabled {
 }
 
 button.success {
-  border-color: #20744a;
-  background: #20744a;
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--accent), #ff9f1c);
   color: #ffffff;
+  box-shadow: 0 12px 24px rgba(255, 122, 0, 0.18);
 }
 
 button.success:hover {
-  border-color: #185b3a;
-  background: #185b3a;
+  border-color: var(--accent-dark);
+  background: var(--accent-dark);
 }
 
 .content {
@@ -258,9 +280,12 @@ button.success:hover {
   gap: 20px;
   min-height: 172px;
   padding: 24px;
-  border: 1px solid #d6dee7;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 92% 18%, rgba(255, 122, 0, 0.14), transparent 32%),
+    linear-gradient(135deg, #ffffff 0%, #ffffff 58%, #fff7ed 100%);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.06);
   grid-column: 1 / -1;
 }
 
@@ -287,9 +312,9 @@ button.success:hover {
 
 .mode-meta span {
   padding: 6px 10px;
-  border: 1px solid #d9e0e7;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: #f7fafc;
+  background: rgba(255, 255, 255, 0.78);
   color: #465668;
   font-size: 13px;
 }
@@ -313,9 +338,10 @@ button.success:hover {
 .section-block,
 .panel,
 .message {
-  border: 1px solid #d6dee7;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.045);
 }
 
 .metric {
@@ -327,14 +353,14 @@ button.success:hover {
 .robot-card p,
 .line-card p,
 .message-meta {
-  color: #64748b;
+  color: var(--muted);
   font-size: 13px;
 }
 
 .metric strong {
   display: block;
   margin-top: 8px;
-  color: #111827;
+  color: var(--ink);
   font-size: 24px;
   line-height: 1.1;
   overflow-wrap: anywhere;
@@ -356,7 +382,7 @@ button.success:hover {
 }
 
 .section-head span {
-  color: #52616f;
+  color: var(--muted);
   font-size: 13px;
   font-weight: 700;
 }
@@ -398,9 +424,9 @@ button.success:hover {
   place-items: center;
   width: 38px;
   height: 38px;
-  border-radius: 8px;
-  background: #ecfdf3;
-  color: #17643e;
+  border-radius: 10px;
+  background: #fff4e8;
+  color: var(--accent-dark);
   font-size: 12px;
   font-weight: 800;
 }
@@ -425,7 +451,7 @@ button.success:hover {
 }
 
 .pill.ok {
-  background: #e7f7ee;
+  background: #ecfdf3;
   color: #17643e;
 }
 
@@ -462,14 +488,14 @@ button.success:hover {
 }
 
 .line-card h3 {
-  color: #475569;
+  color: var(--muted);
   font-size: 14px;
 }
 
 .line-card strong {
   display: block;
   margin-top: 16px;
-  color: #111827;
+  color: var(--ink);
   font-size: 22px;
 }
 
@@ -501,7 +527,6 @@ button.success:hover {
 }
 
 .event-row code,
-.applied-changes code,
 .panel .body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -518,7 +543,7 @@ button.success:hover {
 .empty-state,
 .empty-log {
   margin: 0;
-  color: #64748b;
+  color: var(--muted);
   font-size: 14px;
 }
 
@@ -530,8 +555,8 @@ button.success:hover {
   min-width: 0;
   height: 100vh;
   min-height: 0;
-  border-left: 1px solid #d6dee7;
-  background: #ffffff;
+  border-left: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.98);
   overflow: hidden;
 }
 
@@ -542,8 +567,8 @@ button.success:hover {
   gap: 12px;
   min-height: 70px;
   padding: 14px 14px 12px;
-  border-bottom: 1px solid #d9e0e7;
-  background: #fbfcfd;
+  border-bottom: 1px solid var(--line);
+  background: #ffffff;
 }
 
 .assistant-head h2 {
@@ -559,7 +584,7 @@ button.success:hover {
 
 .assistant-bottom {
   align-self: end;
-  border-top: 1px solid #d9e0e7;
+  border-top: 1px solid var(--line);
   background: #ffffff;
 }
 
@@ -571,7 +596,7 @@ button.success:hover {
   height: 100vh;
   min-height: 0;
   padding-top: 22px;
-  border-left: 1px solid #d6dee7;
+  border-left: 1px solid var(--line);
   background: #ffffff;
 }
 
@@ -579,8 +604,8 @@ button.success:hover {
   width: 36px;
   min-height: 36px;
   padding: 0;
-  border-color: #20744a;
-  background: #20744a;
+  border-color: var(--accent);
+  background: var(--accent);
   color: #ffffff;
   font-weight: 800;
 }
@@ -610,7 +635,7 @@ button.success:hover {
 .message-row.operator .message {
   grid-column: 1;
   grid-row: 1;
-  background: #f8fafc;
+  background: #fff7ed;
 }
 
 .avatar {
@@ -619,15 +644,15 @@ button.success:hover {
   width: 30px;
   height: 30px;
   border-radius: 999px;
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #e0f2fe;
+  color: #0369a1;
   font-size: 11px;
   font-weight: 800;
 }
 
 .message-row.agent .avatar {
-  background: #dcfce7;
-  color: #17643e;
+  background: #fff4e8;
+  color: var(--accent-dark);
 }
 
 .message {
@@ -644,27 +669,42 @@ button.success:hover {
 
 .applied-changes {
   display: grid;
-  gap: 7px;
+  gap: 8px;
   margin-top: 14px;
 }
 
 .applied-changes span {
-  color: #475569;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.applied-changes code {
-  display: block;
-  padding: 8px 10px;
-  border: 1px solid #dce5ed;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #0f4c81;
-  font-size: 12px;
-  white-space: normal;
-  overflow-wrap: anywhere;
+.applied-changes ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.applied-changes li {
+  position: relative;
+  padding-left: 15px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.applied-changes li::before {
+  content: "";
+  position: absolute;
+  top: 0.55em;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
 }
 
 .chat-composer {
@@ -688,49 +728,13 @@ input {
   border-radius: 7px;
   padding: 0 12px;
   background: #ffffff;
-  color: #111827;
+  color: var(--ink);
   font: inherit;
 }
 
 input:focus {
-  border-color: #20744a;
-  outline: 3px solid #dff3e8;
-}
-
-.prompt-suggestions {
-  display: flex;
-  align-items: center;
-  gap: 6px 10px;
-  flex-wrap: wrap;
-}
-
-.prompt-suggestions.compact-list {
-  padding: 10px 12px 0;
-  background: #ffffff;
-}
-
-.prompt-suggestions button {
-  min-height: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #52616f;
-  text-align: left;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.prompt-suggestions button::before {
-  content: "+";
-  margin-right: 4px;
-  color: #20744a;
-}
-
-.prompt-suggestions button:hover {
-  background: transparent;
-  color: #20744a;
-  text-decoration: underline;
+  border-color: var(--accent);
+  outline: 3px solid #ffedd5;
 }
 
 .logs-layout {

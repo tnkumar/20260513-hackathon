@@ -25,14 +25,6 @@ type AgentEntry = {
 
 const MAX = 400;
 const ROBOTS: Robots[] = ["UR3e", "UR5e", "UR10e", "ScaraT6"];
-const EXAMPLES = [
-  "Run balanced production",
-  "Increase can production",
-  "Prioritize fruit sorting",
-  "Handle 5 cans",
-  "Sort 6 fruits",
-  "Disable UR10e",
-];
 
 const DEFAULT_WORKCELL: Workcell = {
   mode: "balanced",
@@ -69,6 +61,124 @@ function lineLabel(line: string) {
   if (line.startsWith("COUNT|")) return "Count";
   if (line.startsWith("LOG|")) return "Log";
   return "Event";
+}
+
+function commandChanges(command: string): string[] {
+  const parts = command.trim().split(/\s+/);
+
+  if (command === "CONTROL MODE BALANCED") {
+    return [
+      "All robots returned to standard production cadence.",
+      "Can conveyor running at 1.0x speed.",
+      "Fruit conveyor running at 1.0x speed.",
+      "Estimated power consumption: 62%.",
+    ];
+  }
+  if (command === "CONTROL MODE CAN_PRIORITY") {
+    return [
+      "Can handling moved to priority production.",
+      "Can conveyor increased to 6.0x speed.",
+      "Fruit conveyor reduced to 0.5x speed.",
+      "ScaraT6 cadence reduced while UR arms focus on cans.",
+      "Estimated power consumption: 78%.",
+    ];
+  }
+  if (command === "CONTROL MODE FRUIT_PRIORITY") {
+    return [
+      "Fruit sorting moved to priority production.",
+      "ScaraT6 cadence increased for faster pick-and-place cycles.",
+      "UR10e removed from can handling and moved to a safe stow position.",
+      "Fruit conveyor increased to 3.0x speed.",
+      "Can conveyor reduced to 0.5x speed.",
+      "Estimated power consumption: 72%.",
+    ];
+  }
+  if (command === "CONTROL MODE LOW_POWER") {
+    return [
+      "Low power production mode enabled.",
+      "UR10e removed from active production.",
+      "Can conveyor reduced to 0.5x speed.",
+      "ScaraT6 cadence reduced to conserve energy.",
+      "Estimated power consumption: 45%.",
+    ];
+  }
+  if (command === "CONTROL MODE HIGH_CAPACITY") {
+    return [
+      "High capacity production mode enabled.",
+      "All robots assigned to active production.",
+      "Can conveyor increased to 6.0x speed.",
+      "Fruit conveyor increased to 2.0x speed.",
+      "ScaraT6 running at fastest demo cadence.",
+      "Estimated power consumption: 95%.",
+    ];
+  }
+  if (parts[0] === "CONTROL" && parts[1] === "TARGET" && parts[2] === "CANS") {
+    return [
+      `Production target set to ${parts[3]} cans.`,
+      "Can handling moved to priority production until the target is reached.",
+      "Can conveyor increased to 6.0x speed.",
+      "Estimated power consumption: 78%.",
+    ];
+  }
+  if (parts[0] === "CONTROL" && parts[1] === "TARGET" && ["FRUITS", "APPLES", "ORANGES"].includes(parts[2] ?? "")) {
+    return [
+      `Production target set to ${parts[3]} ${parts[2].toLowerCase()}.`,
+      "Fruit sorting moved to priority production until the target is reached.",
+      "ScaraT6 cadence increased for faster sorting.",
+      "UR10e removed from can handling and moved to a safe stow position.",
+      "Fruit conveyor increased to 3.0x speed.",
+      "Estimated power consumption: 72%.",
+    ];
+  }
+  if (command === "CONTROL TARGET CLEAR") {
+    return ["Production target cleared.", "Workcell is ready for the next production goal."];
+  }
+  if (parts[0] === "CONTROL" && parts[1] === "DISABLE" && parts[2]) {
+    return [`${parts[2]} removed from active production.`, "Remaining enabled robots continue under the current workcell mode."];
+  }
+  if (parts[0] === "CONTROL" && parts[1] === "ENABLE" && parts[2]) {
+    return [`${parts[2]} returned to active production.`, "Robot availability updated on the dashboard."];
+  }
+  if (parts[0] === "CONTROL" && parts[1] === "LINE" && parts[2] && parts[3] === "STOP") {
+    return [`${titleCaseMode(parts[2].toLowerCase())} line stopped.`, "Conveyor speed set to 0.0x for that line."];
+  }
+  if (parts[0] === "CONTROL" && parts[1] === "LINE" && parts[2] && parts[3] === "START") {
+    return [`${titleCaseMode(parts[2].toLowerCase())} line started.`, "Conveyor resumed at the current mode speed."];
+  }
+  if (command === "CONTROL PAUSE") {
+    return ["Simulation paused.", "Robots and conveyors are holding their current state."];
+  }
+  if (command === "CONTROL RUN") {
+    return ["Simulation resumed in real-time mode.", "Workcell execution continues from the current state."];
+  }
+  if (command === "CONTROL FAST") {
+    return ["Simulation switched to fast mode.", "Webots will advance the workcell faster than real time."];
+  }
+  if (command === "CONTROL STATUS") {
+    return ["Dashboard status refreshed.", "Latest mode, robot, line, count, and target state requested."];
+  }
+  return ["Workcell command applied successfully."];
+}
+
+function appliedChanges(commands?: string[]) {
+  return (commands ?? []).flatMap(commandChanges);
+}
+
+function friendlyAgentError(error: Error) {
+  const message = error.message.toLowerCase();
+  if (message.includes("503") || message.includes("unavailable") || message.includes("high demand")) {
+    return "The AI planner is temporarily busy. Please wait a moment and try the same request again.";
+  }
+  if (message.includes("api key") || message.includes("credential") || message.includes("permission") || message.includes("unauthorized")) {
+    return "The AI planner is not configured correctly. Please check the API key and restart the service.";
+  }
+  if (message.includes("timeout") || message.includes("abort")) {
+    return "The AI planner took too long to respond. Please try again.";
+  }
+  if (message.includes("coordinator")) {
+    return "The workcell coordinator is not connected. Please restart the simulation and try again.";
+  }
+  return "I could not plan that request right now. Please try again in a moment.";
 }
 
 function routeLine(
@@ -177,7 +287,7 @@ export default function App() {
   const [agentLog, setAgentLog] = useState<AgentEntry[]>([
     {
       role: "agent",
-      text: "FactoryFlow Copilot is ready. Send a production goal and I will translate it into validated workcell controls.",
+      text: "RobotAbstraction is ready. Send a production goal and I will translate it into validated workcell controls.",
     },
   ]);
   const wsRef = useRef<WebSocket | null>(null);
@@ -244,7 +354,8 @@ export default function App() {
         },
       ]);
     } catch (err) {
-      setAgentLog((x) => [...x, { role: "agent", text: `Agent error: ${(err as Error).message}` }]);
+      console.error("RobotAbstraction agent error:", err);
+      setAgentLog((x) => [...x, { role: "agent", text: friendlyAgentError(err as Error) }]);
     } finally {
       setAgentBusy(false);
     }
@@ -263,10 +374,10 @@ export default function App() {
     <div className={`app ${assistantOpen ? "with-assistant" : "assistant-collapsed"}`}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">F</div>
+          <div className="brand-mark">RA</div>
           <div>
-            <strong>FactoryFlow</strong>
-            <span>Robotics Ops</span>
+            <strong>Robot<span>Abstraction</span></strong>
+            <small>Industrial Robot Ops</small>
           </div>
         </div>
 
@@ -293,12 +404,12 @@ export default function App() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Factory Manager Console</p>
+            <p className="eyebrow">RobotAbstraction Console</p>
             <h1>{view === "dashboard" ? "Dashboard" : "Robot Logs"}</h1>
           </div>
           <div className="controls">
             <button type="button" onClick={() => setAssistantOpen((open) => !open)}>
-              {assistantOpen ? "Hide Assistant" : "Show Assistant"}
+              {assistantOpen ? "Hide Agent" : "Show Agent"}
             </button>
           </div>
         </header>
@@ -375,7 +486,7 @@ function Dashboard(props: {
             Low Power
           </button>
           <button type="button" onClick={() => setAssistantOpen((open) => !open)}>
-            {assistantOpen ? "Collapse Assistant" : "Open Assistant"}
+            {assistantOpen ? "Collapse Agent" : "Open Agent"}
           </button>
         </div>
       </section>
@@ -448,7 +559,7 @@ function AssistantPanel(props: {
     return (
       <aside className="assistant-rail">
         <button type="button" onClick={() => setOpen(true)}>
-          AI
+          RA
         </button>
       </aside>
     );
@@ -458,8 +569,8 @@ function AssistantPanel(props: {
     <aside className="assistant-panel">
       <header className="assistant-head">
         <div>
-          <p className="eyebrow">FactoryFlow Copilot</p>
-          <h2>Assistant</h2>
+          <p className="eyebrow">RobotAbstraction</p>
+          <h2>Control Agent</h2>
         </div>
         <button type="button" onClick={() => setOpen(false)}>
           Collapse
@@ -475,7 +586,7 @@ function AssistantPanel(props: {
             <div className="message-row agent">
               <div className="avatar">AI</div>
               <div className="message">
-                <div className="message-meta">Copilot</div>
+                <div className="message-meta">RobotAbstraction Agent</div>
                 <div>Planning validated workcell controls...</div>
               </div>
             </div>
@@ -484,14 +595,6 @@ function AssistantPanel(props: {
         </div>
 
         <div className="assistant-bottom">
-          <div className="prompt-suggestions compact-list">
-            {EXAMPLES.map((example) => (
-              <button key={example} type="button" onClick={() => void runAgent(example)}>
-                {example}
-              </button>
-            ))}
-          </div>
-
           <form
             className="chat-composer"
             onSubmit={(event) => {
@@ -568,19 +671,22 @@ function LineCard(props: { name: string; state: string; detail: string }) {
 function ChatMessage(props: { entry: AgentEntry }) {
   const { entry } = props;
   const isAgent = entry.role === "agent";
+  const changes = appliedChanges(entry.commands);
 
   return (
     <div className={`message-row ${entry.role}`}>
       <div className="avatar">{isAgent ? "AI" : "OP"}</div>
       <div className="message">
-        <div className="message-meta">{isAgent ? `Copilot${entry.planner ? ` / ${entry.planner}` : ""}` : "Operator"}</div>
+        <div className="message-meta">{isAgent ? "RobotAbstraction Agent" : "Operator"}</div>
         <div>{entry.text}</div>
-        {entry.commands && entry.commands.length > 0 && (
+        {changes.length > 0 && (
           <div className="applied-changes">
             <span>Applied changes</span>
-            {entry.commands.map((cmd) => (
-              <code key={cmd}>{cmd}</code>
-            ))}
+            <ul>
+              {changes.map((change, index) => (
+                <li key={`${index}-${change}`}>{change}</li>
+              ))}
+            </ul>
           </div>
         )}
       </div>

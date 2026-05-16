@@ -203,20 +203,30 @@ Request: ${message}`;
 async function adkPlan(message, context) {
   if (process.env.USE_ADK === "0")
     throw new Error("ADK planner is disabled by USE_ADK=0");
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
+    console.log(`agent[${requestId}]: prompt=${JSON.stringify(message)}`);
+    console.log(`agent[${requestId}]: calling ADK ${ADK_AGENT_URL}`);
     const res = await fetch(ADK_AGENT_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message, context: context || {} }),
+      body: JSON.stringify({ request_id: requestId, message, context: context || {} }),
       signal: controller.signal
     });
-    if (!res.ok)
-      throw new Error(`ADK HTTP ${res.status}`);
+    if (!res.ok) {
+      const errorText = await res.text().catch(() => "");
+      console.log(`agent[${requestId}]: ADK error status=${res.status} body=${errorText}`);
+      throw new Error(`ADK HTTP ${res.status}: ${errorText || "empty response body"}`);
+    }
     const data = await res.json();
     if (!data || !Array.isArray(data.actions))
       throw new Error("ADK returned invalid plan");
+    if (data.planner === "deterministic-fallback")
+      console.log(`agent[${requestId}]: ADK service used deterministic fallback=${JSON.stringify(data)}`);
+    else
+      console.log(`agent[${requestId}]: ADK response=${JSON.stringify(data)}`);
     return data;
   } finally {
     clearTimeout(timer);
@@ -362,13 +372,17 @@ const agentServer = http.createServer(async (req, res) => {
       writeJson(res, 400, { error: "message is required" });
       return;
     }
+    console.log(`agent: received UI prompt=${JSON.stringify(message)}`);
     const plan = await adkPlan(message, body.context || {});
     const planner = plan.planner || "adk";
     const commands = plan.actions.map(commandForTool).filter(Boolean);
+    console.log(`agent: planner=${planner} actions=${JSON.stringify(plan.actions)} commands=${JSON.stringify(commands)}`);
     const execution = await sendCoordinatorCommands(commands);
+    console.log(`agent: coordinator execution=${JSON.stringify(execution)}`);
     const reply = execution.ok ? plan.reply : `${plan.reply} Coordinator is not connected yet, so the plan is staged in the UI but was not applied.`;
     writeJson(res, 200, { planner, reply, actions: plan.actions, commands, execution });
   } catch (err) {
+    console.log(`agent: planning error=${err.message}`);
     writeJson(res, 502, { error: `Agent planning failed: ${err.message}` });
   }
 });
