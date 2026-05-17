@@ -1,6 +1,6 @@
-# FactoryFlow Copilot
+# RobotAbstraction
 
-FactoryFlow Copilot is a Webots-based robotic workcell demo that shows how a factory manager can operate industrial robots through intent instead of low-level robot commands.
+RobotAbstraction is a Webots-based robotic workcell demo that shows how a factory manager can operate industrial robots through intent instead of low-level robot commands.
 
 The project combines:
 
@@ -40,7 +40,7 @@ They usually should not have to care about:
 - Whether the can cell is driven by UR robots and the fruit cell by a SCARA robot
 - Whether Webots uses supervisor fields, position sensors, or controller-specific scripts
 
-FactoryFlow demonstrates an abstraction layer where the agent is the intent interpreter and the coordinator is the execution boundary.
+RobotAbstraction demonstrates an abstraction layer where the agent is the intent interpreter and the coordinator is the execution boundary.
 
 ## Abstraction Model
 
@@ -163,7 +163,7 @@ React dashboard
 | `agent_service/factory_agent.py` | Defines the agent instruction and tool functions. |
 | `agent_service/server.py` | Exposes `POST /plan` for the ADK planner. |
 | `frontend/server.mjs` | Bridges the dashboard to the coordinator and calls the agent service. |
-| `frontend/src/App.tsx` | React dashboard, logs, and assistant panel. |
+| `frontend/src/App.tsx` | React dashboard, logs, and control agent panel. |
 | `combined_world/controllers/coordinator/coordinator.c` | Webots supervisor and trusted workcell coordinator. |
 | `combined_world/controllers/ur_arm_executor/ur_arm_executor.c` | UR robot executor that applies coordinator commands. |
 | `combined_world/controllers/scara_food_industry/scara_food_industry.py` | SCARA controller that applies `SCARA_*` commands. |
@@ -191,7 +191,7 @@ Examples:
 | `Start the fruit line` | `start_line(line="fruit_line")` |
 | `Give me a production report` | `get_workcell_status()` |
 
-The agent currently requires Google ADK to work. If ADK, credentials, or the model call are unavailable, the app returns an error instead of falling back to deterministic keyword logic.
+The app tries the Google ADK agent first. If the model is temporarily unavailable, the backend logs the ADK failure and routes supported demo commands through a deterministic fallback planner so the demo can continue.
 
 ## Prerequisites
 
@@ -277,17 +277,21 @@ After Webots and the dashboard are running:
 
 1. Open `http://127.0.0.1:5173/`.
 2. Make sure the dashboard shows the coordinator as connected.
-3. Open the assistant panel if it is collapsed.
+3. Open the RobotAbstraction control agent panel if it is collapsed.
 4. Try one command at a time.
 
 Recommended demo prompts:
+
+```text
+Run the cell at maximum throughput
+```
 
 ```text
 Run balanced production
 ```
 
 ```text
-Increase can production
+I want 5 cans produced fast
 ```
 
 ```text
@@ -295,35 +299,49 @@ Prioritize fruit sorting
 ```
 
 ```text
-Handle 5 cans
+Bring UR10e back into production
 ```
 
 ```text
-Sort 6 fruits
+Hold the can line for now
 ```
 
 ```text
-Run low power mode
+Run balanced production
+```
+
+Additional supported demo prompts:
+
+```text
+Let's go back to normal production
 ```
 
 ```text
-Run high capacity mode
+We need more cans coming through
 ```
 
 ```text
-Disable UR10e
+Can you sort 6 fruits next?
 ```
 
 ```text
-Enable UR10e
+Sort 4 apples
 ```
 
 ```text
-Stop the fruit line
+Sort 3 oranges
 ```
 
 ```text
-Start the fruit line
+Let's save power
+```
+
+```text
+Resume the can line
+```
+
+```text
+Resume the fruit line
 ```
 
 ```text
@@ -409,9 +427,9 @@ export SCARA_SPEED_DIV=4
 
 ## Troubleshooting
 
-### Agent error in the chat panel
+### Agent error in the control agent panel
 
-The project requires ADK now. Check:
+The app uses Google ADK first and deterministic fallback for supported demo commands when the model is temporarily unavailable. If ADK is not configured, check:
 
 ```bash
 cd agent_service

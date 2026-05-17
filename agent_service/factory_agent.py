@@ -6,7 +6,7 @@ import re
 import uuid
 
 
-ACTIONS = contextvars.ContextVar("factoryflow_actions", default=None)
+ACTIONS = contextvars.ContextVar("robotabstraction_actions", default=None)
 
 TOOLS = {
     "pause_simulation",
@@ -176,7 +176,7 @@ def fast_simulation() -> dict:
 
 
 INSTRUCTION = """
-You are FactoryFlow Copilot, the assistant used by a factory manager to operate a simulated robotic workcell in Webots.
+You are RobotAbstraction, the control agent used by a factory manager to operate a simulated robotic workcell in Webots.
 Think of yourself as a calm floor coordinator: the operator gives you a plain-English production request, and your job is to translate that request into exactly one safe, valid workcell tool call.
 
 Application context:
@@ -390,7 +390,7 @@ async def _run_adk_async(message, context):
     print(f"adk-agent: using model={model}", flush=True)
     agent = LlmAgent(
         model=model,
-        name="factoryflow_copilot",
+        name="robotabstraction_control_agent",
         instruction=INSTRUCTION,
         tools=[
             pause_simulation,
@@ -407,7 +407,7 @@ async def _run_adk_async(message, context):
         ],
     )
     session_service = InMemorySessionService()
-    app_name = "factoryflow"
+    app_name = "robotabstraction"
     user_id = "dashboard"
     session_id = f"turn-{uuid.uuid4().hex}"
     if hasattr(session_service, "create_session"):
