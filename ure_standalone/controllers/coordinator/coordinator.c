@@ -457,7 +457,7 @@ static int ur_phase_ticks_from_env(void) {
 /* Run scara_coordinator_step only every N supervisor steps (slow SCARA script vs sim time). */
 static int scara_stride_from_env(void) {
   const char *e = getenv("SCARA_SPEED_DIV");
-  int div = 10;
+  int div = 4;
   if (e && e[0]) {
     div = atoi(e);
     if (div < 1)

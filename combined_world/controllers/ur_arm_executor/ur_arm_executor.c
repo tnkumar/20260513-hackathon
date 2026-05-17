@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h> /* getenv */
 #include <string.h>
@@ -65,6 +66,12 @@ static void apply_command(const char *cmd, WbDeviceTag hand_motors[3], WbDeviceT
   } else if (strcmp(cmd, "ROTATING_ARM_BACK") == 0) {
     for (i = 0; i < 4; ++i)
       wb_motor_set_position(ur_motors[i], 0.0);
+  } else if (strcmp(cmd, "STOW_AWAY") == 0) {
+    const double stow_positions[] = {0.0, -1.57, 1.57, 0.0};
+    for (i = 0; i < 3; ++i)
+      wb_motor_set_position(hand_motors[i], wb_motor_get_min_position(hand_motors[i]));
+    for (i = 0; i < 4; ++i)
+      wb_motor_set_position(ur_motors[i], stow_positions[i]);
   }
 }
 
@@ -150,6 +157,7 @@ static void drain_socket_commands(int *sock_ptr, char *line_buf, size_t *line_le
 }
 
 int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
   wb_robot_init();
   const int time_step = (int)wb_robot_get_basic_time_step();
   double speed = 1.0;
